@@ -212,8 +212,8 @@ void SimpleCNNInference::loadWeights() {
     std::cout << "Loading model weights..." << std::endl;
     
     // Conv1 weights
-    auto conv1_weights = loadBinaryFile<float>("../../../data/weights/conv1.weight.bin");
-    auto conv1_biases = loadBinaryFile<float>("../../../data/weights/conv1.bias.bin");
+    auto conv1_weights = loadBinaryFile<float>("../../../data/weights/conv1.weight_fp32.bin");
+    auto conv1_biases = loadBinaryFile<float>("../../../data/weights/conv1.bias_fp32.bin");
     
     // Debug print first few weights for verification
     std::cout << "Conv1 weights first values: ";
@@ -231,22 +231,22 @@ void SimpleCNNInference::loadWeights() {
     }
 
     // Conv2 weights
-    auto conv2_weights = loadBinaryFile<float>("../../../data/weights/conv2.weight.bin");
-    auto conv2_biases = loadBinaryFile<float>("../../../data/weights/conv2.bias.bin");
+    auto conv2_weights = loadBinaryFile<float>("../../../data/weights/conv2.weight_fp32.bin");
+    auto conv2_biases = loadBinaryFile<float>("../../../data/weights/conv2.bias_fp32.bin");
     
     const size_t conv2_weights_size = 64 * 32 * 3 * 3;
     const size_t conv2_bias_size = 64;
     
     // FC1 weights
-    auto fc1_weights = loadBinaryFile<float>("../../../data/weights/fc1.weight.bin");
-    auto fc1_biases = loadBinaryFile<float>("../../../data/weights/fc1.bias.bin");
+    auto fc1_weights = loadBinaryFile<float>("../../../data/weights/fc1.weight_fp32.bin");
+    auto fc1_biases = loadBinaryFile<float>("../../../data/weights/fc1.bias_fp32.bin");
     
     const size_t fc1_weights_size = 128 * (64 * 8 * 8);
     const size_t fc1_bias_size = 128;  // Added definition
     
     // FC2 weights
-    auto fc2_weights = loadBinaryFile<float>("../../../data/weights/fc2.weight.bin");
-    auto fc2_biases = loadBinaryFile<float>("../../../data/weights/fc2.bias.bin");
+    auto fc2_weights = loadBinaryFile<float>("../../../data/weights/fc2.weight_fp32.bin");
+    auto fc2_biases = loadBinaryFile<float>("../../../data/weights/fc2.bias_fp32.bin");
     
     const size_t fc2_weights_size = 10 * 128;
     const size_t fc2_bias_size = 10;  // Added definition

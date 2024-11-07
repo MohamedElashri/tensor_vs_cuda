@@ -252,133 +252,79 @@ TensorCoreCNNInference::~TensorCoreCNNInference() {
 }
 
 void TensorCoreCNNInference::loadWeights() {
-    std::cout << "Loading model weights with FP16 conversion and scaling..." << std::endl;
-    
-    // Load weights and biases for Conv1
-    auto conv1_weights = loadBinaryFile<float>("../../../data/weights/conv1.weight.bin");
-    auto conv1_biases = loadBinaryFile<float>("../../../data/weights/conv1.bias.bin");
-    
-    // Calculate scaling factors for different layers
-    // For convolution layers: 1/sqrt(kernel_size * in_channels)
-    // For FC layers: 1/sqrt(in_features)
-    const float conv1_scale = 1.0f / std::sqrt(3.0f * 3.0f * 3.0f);  // kernel=3x3, in_channels=3
-    const float conv2_scale = 1.0f / std::sqrt(3.0f * 3.0f * 32.0f); // kernel=3x3, in_channels=32
-    const float fc1_scale = 1.0f / std::sqrt(64.0f * 8.0f * 8.0f);   // input size = 64*8*8
-    const float fc2_scale = 1.0f / std::sqrt(128.0f);                 // input size = 128
+    std::cout << "Loading model weights as FP32 without scaling..." << std::endl;
+
+    // Load Conv1 weights and biases as FP32
+    auto conv1_weights = loadBinaryFile<float>("../../../data/weights/conv1.weight_fp32.bin");
+    auto conv1_biases = loadBinaryFile<float>("../../../data/weights/conv1.bias_fp32.bin");
 
     // Verify Conv1 dimensions
     const size_t conv1_weights_size = 32 * 3 * 3 * 3;  // out_channels * in_channels * kernel_size^2
     const size_t conv1_bias_size = 32;                 // out_channels
-    
     if (conv1_weights.size() != conv1_weights_size || conv1_biases.size() != conv1_bias_size) {
-        std::cerr << "Error: Conv1 weight/bias size mismatch! Expected weights: " 
-                  << conv1_weights_size << ", got: " << conv1_weights.size() 
-                  << ". Expected biases: " << conv1_bias_size 
-                  << ", got: " << conv1_biases.size() << std::endl;
+        std::cerr << "Error: Conv1 weight/bias size mismatch!" << std::endl;
         std::exit(EXIT_FAILURE);
     }
 
-    // Convert and scale Conv1 weights to FP16
-    std::vector<__half> conv1_weights_fp16(conv1_weights_size);
-    for (size_t i = 0; i < conv1_weights_size; ++i) {
-        conv1_weights_fp16[i] = __float2half(conv1_weights[i] * conv1_scale);
-    }
+    // Allocate and copy Conv1 weights and biases to GPU in FP32
+    cudaMalloc(&d_conv1_weight, conv1_weights_size * sizeof(float));
+    cudaMalloc(&d_conv1_bias, conv1_bias_size * sizeof(float));
+    cudaMemcpy(d_conv1_weight, conv1_weights.data(), conv1_weights_size * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_conv1_bias, conv1_biases.data(), conv1_bias_size * sizeof(float), cudaMemcpyHostToDevice);
 
+    // Load Conv2 weights and biases as FP32
+    auto conv2_weights = loadBinaryFile<float>("../../../data/weights/conv2.weight_fp32.bin");
+    auto conv2_biases = loadBinaryFile<float>("../../../data/weights/conv2.bias_fp32.bin");
 
-    std::vector<__half> conv1_biases_fp16(conv1_bias_size);
-    for (size_t i = 0; i < conv1_bias_size; ++i) {
-        conv1_biases_fp16[i] = __float2half(conv1_biases[i]);
-    }
-
-    // Conv2 weights and biases
-    auto conv2_weights = loadBinaryFile<float>("../../../data/weights/conv2.weight.bin");
-    auto conv2_biases = loadBinaryFile<float>("../../../data/weights/conv2.bias.bin");
-    
+    // Verify Conv2 dimensions
     const size_t conv2_weights_size = 64 * 32 * 3 * 3;
     const size_t conv2_bias_size = 64;
-    
     if (conv2_weights.size() != conv2_weights_size || conv2_biases.size() != conv2_bias_size) {
         std::cerr << "Error: Conv2 weight/bias size mismatch!" << std::endl;
         std::exit(EXIT_FAILURE);
     }
 
-    // Convert and scale Conv2 weights
-    std::vector<__half> conv2_weights_fp16(conv2_weights_size);
-    for (size_t i = 0; i < conv2_weights_size; ++i) {
-        conv2_weights_fp16[i] = __float2half(conv2_weights[i] * conv2_scale);
-    }
+    // Allocate and copy Conv2 weights and biases to GPU in FP32
+    cudaMalloc(&d_conv2_weight, conv2_weights_size * sizeof(float));
+    cudaMalloc(&d_conv2_bias, conv2_bias_size * sizeof(float));
+    cudaMemcpy(d_conv2_weight, conv2_weights.data(), conv2_weights_size * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_conv2_bias, conv2_biases.data(), conv2_bias_size * sizeof(float), cudaMemcpyHostToDevice);
 
-    std::vector<__half> conv2_biases_fp16(conv2_bias_size);
-    for (size_t i = 0; i < conv2_bias_size; ++i) {
-        conv2_biases_fp16[i] = __float2half(conv2_biases[i]);
-    }
+    // Load FC1 weights and biases as FP32
+    auto fc1_weights = loadBinaryFile<float>("../../../data/weights/fc1.weight_fp32.bin");
+    auto fc1_biases = loadBinaryFile<float>("../../../data/weights/fc1.bias_fp32.bin");
 
-    // FC1 weights and biases
-    auto fc1_weights = loadBinaryFile<float>("../../../data/weights/fc1.weight.bin");
-    auto fc1_biases = loadBinaryFile<float>("../../../data/weights/fc1.bias.bin");
-    
-    const size_t fc1_weights_size = 128 * (64 * 8 * 8);
+    // Verify FC1 dimensions
+    const size_t fc1_weights_size = 128 * (64 * 8 * 8); // Output nodes * flattened input size
     const size_t fc1_bias_size = 128;
-    
     if (fc1_weights.size() != fc1_weights_size || fc1_biases.size() != fc1_bias_size) {
         std::cerr << "Error: FC1 weight/bias size mismatch!" << std::endl;
         std::exit(EXIT_FAILURE);
     }
 
-    // Convert and scale FC1 weights
-    std::vector<__half> fc1_weights_fp16(fc1_weights_size);
-    for (size_t i = 0; i < fc1_weights_size; ++i) {
-        fc1_weights_fp16[i] = __float2half(fc1_weights[i] * fc1_scale);
-    }
+    // Allocate and copy FC1 weights and biases to GPU in FP32
+    cudaMalloc(&d_fc1_weight, fc1_weights_size * sizeof(float));
+    cudaMalloc(&d_fc1_bias, fc1_bias_size * sizeof(float));
+    cudaMemcpy(d_fc1_weight, fc1_weights.data(), fc1_weights_size * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_fc1_bias, fc1_biases.data(), fc1_bias_size * sizeof(float), cudaMemcpyHostToDevice);
 
-    std::vector<__half> fc1_biases_fp16(fc1_bias_size);
-    for (size_t i = 0; i < fc1_bias_size; ++i) {
-        fc1_biases_fp16[i] = __float2half(fc1_biases[i]);
-    }
+    // Load FC2 weights and biases as FP32
+    auto fc2_weights = loadBinaryFile<float>("../../../data/weights/fc2.weight_fp32.bin");
+    auto fc2_biases = loadBinaryFile<float>("../../../data/weights/fc2.bias_fp32.bin");
 
-    // FC2 weights and biases
-    auto fc2_weights = loadBinaryFile<float>("../../../data/weights/fc2.weight.bin");
-    auto fc2_biases = loadBinaryFile<float>("../../../data/weights/fc2.bias.bin");
-    
+    // Verify FC2 dimensions
     const size_t fc2_weights_size = 10 * 128;
     const size_t fc2_bias_size = 10;
-    
     if (fc2_weights.size() != fc2_weights_size || fc2_biases.size() != fc2_bias_size) {
         std::cerr << "Error: FC2 weight/bias size mismatch!" << std::endl;
         std::exit(EXIT_FAILURE);
     }
 
-    // Convert and scale FC2 weights
-    std::vector<__half> fc2_weights_fp16(fc2_weights_size);
-    for (size_t i = 0; i < fc2_weights_size; ++i) {
-        fc2_weights_fp16[i] = __float2half(fc2_weights[i] * fc2_scale);
-    }
-
-    std::vector<__half> fc2_biases_fp16(fc2_bias_size);
-    for (size_t i = 0; i < fc2_bias_size; ++i) {
-        fc2_biases_fp16[i] = __float2half(fc2_biases[i]);
-    }
-
-    // Allocate and copy weights to GPU in order
-    cudaMalloc(&d_conv1_weight, conv1_weights_size * sizeof(__half));
-    cudaMalloc(&d_conv1_bias, conv1_bias_size * sizeof(__half));
-    cudaMemcpy(d_conv1_weight, conv1_weights_fp16.data(), conv1_weights_size * sizeof(__half), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_conv1_bias, conv1_biases_fp16.data(), conv1_bias_size * sizeof(__half), cudaMemcpyHostToDevice);
-
-    cudaMalloc(&d_conv2_weight, conv2_weights_size * sizeof(__half));
-    cudaMalloc(&d_conv2_bias, conv2_bias_size * sizeof(__half));
-    cudaMemcpy(d_conv2_weight, conv2_weights_fp16.data(), conv2_weights_size * sizeof(__half), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_conv2_bias, conv2_biases_fp16.data(), conv2_bias_size * sizeof(__half), cudaMemcpyHostToDevice);
-
-    cudaMalloc(&d_fc1_weight, fc1_weights_size * sizeof(__half));
-    cudaMalloc(&d_fc1_bias, fc1_bias_size * sizeof(__half));
-    cudaMemcpy(d_fc1_weight, fc1_weights_fp16.data(), fc1_weights_size * sizeof(__half), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_fc1_bias, fc1_biases_fp16.data(), fc1_bias_size * sizeof(__half), cudaMemcpyHostToDevice);
-
-    cudaMalloc(&d_fc2_weight, fc2_weights_size * sizeof(__half));
-    cudaMalloc(&d_fc2_bias, fc2_bias_size * sizeof(__half));
-    cudaMemcpy(d_fc2_weight, fc2_weights_fp16.data(), fc2_weights_size * sizeof(__half), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_fc2_bias, fc2_biases_fp16.data(), fc2_bias_size * sizeof(__half), cudaMemcpyHostToDevice);
+    // Allocate and copy FC2 weights and biases to GPU in FP32
+    cudaMalloc(&d_fc2_weight, fc2_weights_size * sizeof(float));
+    cudaMalloc(&d_fc2_bias, fc2_bias_size * sizeof(float));
+    cudaMemcpy(d_fc2_weight, fc2_weights.data(), fc2_weights_size * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_fc2_bias, fc2_biases.data(), fc2_bias_size * sizeof(float), cudaMemcpyHostToDevice);
 
     // Check for CUDA errors
     cudaError_t error = cudaGetLastError();
@@ -387,21 +333,7 @@ void TensorCoreCNNInference::loadWeights() {
         std::exit(EXIT_FAILURE);
     }
 
-    // Add debug printing of weight statistics
-    std::cout << "\nWeight Statistics:" << std::endl;
-    std::cout << "Conv1 scale factor: " << conv1_scale << std::endl;
-    std::cout << "Conv2 scale factor: " << conv2_scale << std::endl;
-    std::cout << "FC1 scale factor: " << fc1_scale << std::endl;
-    std::cout << "FC2 scale factor: " << fc2_scale << std::endl;
-
-    // Print first few weights for verification
-    std::cout << "\nSample weights after conversion:" << std::endl;
-    std::cout << "Conv1 first weight: " << __half2float(conv1_weights_fp16[0]) << std::endl;
-    std::cout << "Conv2 first weight: " << __half2float(conv2_weights_fp16[0]) << std::endl;
-    std::cout << "FC1 first weight: " << __half2float(fc1_weights_fp16[0]) << std::endl;
-    std::cout << "FC2 first weight: " << __half2float(fc2_weights_fp16[0]) << std::endl;
-    
-    std::cout << "Successfully loaded all weights to GPU with FP16 precision." << std::endl;
+    std::cout << "Successfully loaded all weights and biases as FP32 to GPU." << std::endl;
 }
 
 void TensorCoreCNNInference::initializeLayers() {
