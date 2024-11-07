@@ -3,6 +3,9 @@
 
 ## anything with data
 **/data
+**/*.pkl
+**/*.csv
+**/*.bin
 
 ## vscode settings
 .vscode
