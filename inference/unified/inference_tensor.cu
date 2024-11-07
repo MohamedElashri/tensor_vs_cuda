@@ -649,12 +649,12 @@ void TensorCNNInference::loadWeights() {
 
     std::cout << "Successfully loaded all weights to GPU." << std::endl;
     
-    // Print first few weights for verification
-    std::cout << "Conv1 weights first values: ";
-    for (int i = 0; i < 5; i++) {
-        std::cout << std::fixed << std::setprecision(6) << conv1_weights[i] << " ";
-    }
-    std::cout << std::endl;
+    // // Print first few weights for verification (debugging)
+    // std::cout << "Conv1 weights first values: ";
+    // for (int i = 0; i < 5; i++) {
+    //     std::cout << std::fixed << std::setprecision(6) << conv1_weights[i] << " ";
+    // }
+    // std::cout << std::endl;
 }
 
 int main() {
@@ -663,12 +663,27 @@ int main() {
         auto validation_images = loadBinaryFile<float>("../../../data/validation/validation_images.bin");
         auto validation_labels = loadBinaryFile<int>("../../../data/validation/validation_labels.bin");
 
+        // Organize the original data into individual images
         std::vector<std::vector<float>> images;
         size_t image_size = 3 * 32 * 32;
         for (size_t i = 0; i < validation_images.size(); i += image_size) {
             images.push_back(std::vector<float>(validation_images.begin() + i, 
-                                              validation_images.begin() + i + image_size));
+                                                validation_images.begin() + i + image_size));
         }
+
+        // Repeat the dataset to increase the total number of images
+        int repeat_factor = 10; // Adjust this factor as needed to increase the dataset size
+        std::vector<std::vector<float>> repeated_images;
+        std::vector<int> repeated_labels;
+
+        for (int i = 0; i < repeat_factor; ++i) {
+            repeated_images.insert(repeated_images.end(), images.begin(), images.end());
+            repeated_labels.insert(repeated_labels.end(), validation_labels.begin(), validation_labels.end());
+        }
+
+        int total_images = repeated_images.size();
+
+        std::cout << "Total images after repeating: " << total_images << std::endl;
 
         std::cout << "Creating Tensor Core inference engine..." << std::endl;
         TensorCNNInference cnn;
@@ -686,12 +701,11 @@ int main() {
 
         size_t correct_count = 0;
         float total_time = 0.0f;
-        int total_images = images.size();
 
         // Warmup run
         std::cout << "Performing warmup runs..." << std::endl;
         for (int i = 0; i < 10; i++) {
-            cnn.infer(images[0]);
+            cnn.infer(repeated_images[0]);
         }
 
         // Main evaluation loop
@@ -700,7 +714,7 @@ int main() {
             try {
                 CUDA_CHECK(cudaEventRecord(start));
                 
-                cnn.infer(images[i]);
+                cnn.infer(repeated_images[i]);
                 std::vector<float> output = cnn.getOutput();
                 
                 CUDA_CHECK(cudaEventRecord(stop));
@@ -711,35 +725,37 @@ int main() {
                 total_time += milliseconds;
 
                 int predicted_label = std::distance(output.begin(), 
-                                                  std::max_element(output.begin(), output.end()));
+                                                    std::max_element(output.begin(), output.end()));
                 
-                if (predicted_label == validation_labels[i]) {
+                if (predicted_label == repeated_labels[i]) {
                     ++correct_count;
                 }
 
                 if (i % 100 == 0) {
                     float running_accuracy = (static_cast<float>(correct_count) / (i + 1)) * 100.0f;
-                    std::cout << "\nProcessed " << i << "/" << total_images << " images" << std::endl;
-                    std::cout << "Running accuracy: " << std::fixed << std::setprecision(2) 
-                             << running_accuracy << "%" << std::endl;
-                    std::cout << "Current inference time: " << std::fixed << std::setprecision(3) 
-                             << milliseconds << " ms" << std::endl;
+
+                    // Print intermediate statistics (debugging)
+                    // std::cout << "\nProcessed " << i + 1 << "/" << total_images << " images" << std::endl;
+                    // std::cout << "Running accuracy: " << std::fixed << std::setprecision(2) 
+                    //           << running_accuracy << "%" << std::endl;
+                    // std::cout << "Current inference time: " << std::fixed << std::setprecision(3) 
+                    //           << milliseconds << " ms" << std::endl;
                     
-                    // Print top 5 predictions for current image
-                    std::vector<std::pair<int, float>> scores;
-                    for (size_t j = 0; j < output.size(); ++j) {
-                        scores.emplace_back(j, output[j]);
-                    }
-                    std::sort(scores.begin(), scores.end(),
-                             [](const auto& a, const auto& b) { return a.second > b.second; });
+                    // Print top 5 predictions for current image (debugging)
+                    // std::vector<std::pair<int, float>> scores;
+                    // for (size_t j = 0; j < output.size(); ++j) {
+                    //     scores.emplace_back(j, output[j]);
+                    // }
+                    // std::sort(scores.begin(), scores.end(),
+                    //           [](const auto& a, const auto& b) { return a.second > b.second; });
                     
-                    std::cout << "Top 5 predictions for current image:" << std::endl;
-                    for (int k = 0; k < std::min(5, static_cast<int>(scores.size())); ++k) {
-                        std::cout << "  Class " << std::setw(2) << scores[k].first 
-                                 << ": " << std::fixed << std::setprecision(4) 
-                                 << (scores[k].second * 100.0f) << "%" << std::endl;
-                    }
-                    std::cout << "True label: " << validation_labels[i] << std::endl;
+                    // std::cout << "Top 5 predictions for current image:" << std::endl;
+                    // for (int k = 0; k < std::min(5, static_cast<int>(scores.size())); ++k) {
+                    //     std::cout << "  Class " << std::setw(2) << scores[k].first 
+                    //               << ": " << std::fixed << std::setprecision(4) 
+                    //               << (scores[k].second * 100.0f) << "%" << std::endl;
+                    // }
+                    // std::cout << "True label: " << repeated_labels[i] << std::endl;
                 }
             }
             catch (const std::exception& e) {
@@ -763,7 +779,7 @@ int main() {
         std::cout << "Throughput: " << std::fixed << std::setprecision(1) 
                   << throughput << " images/second" << std::endl;
         std::cout << "Total evaluation time: " << std::fixed << std::setprecision(2) 
-                  << total_time/1000.0f << " seconds" << std::endl;
+                  << total_time / 1000.0f << " seconds" << std::endl;
 
         CUDA_CHECK(cudaEventDestroy(start));
         CUDA_CHECK(cudaEventDestroy(stop));
