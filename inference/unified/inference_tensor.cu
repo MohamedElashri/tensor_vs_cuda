@@ -47,10 +47,10 @@ std::vector<T> loadBinaryFile(const std::string& filename) {
     }                                                                            \
 }
 
-class TensorCoreCNNInference {
+class TensorCNNInference {
 public:
-    TensorCoreCNNInference();
-    ~TensorCoreCNNInference();
+    TensorCNNInference();
+    ~ TensorCNNInference();
     void loadWeights();
     void initializeLayers();
     void checkTensorCoreUsage();
@@ -129,7 +129,7 @@ private:
         size_t* workspace_size);
 };
 
-TensorCoreCNNInference::TensorCoreCNNInference() : batch_size(1) {
+TensorCNNInference::TensorCNNInference() : batch_size(1) {
     std::cout << "Initializing TensorCore CNN..." << std::endl;
     
     // Create cuDNN handle
@@ -168,7 +168,7 @@ TensorCoreCNNInference::TensorCoreCNNInference() : batch_size(1) {
     checkTensorCoreUsage();
 }
 
-cudnnConvolutionFwdAlgo_t TensorCoreCNNInference::findBestConvAlgorithm(
+cudnnConvolutionFwdAlgo_t TensorCNNInference::findBestConvAlgorithm(
     cudnnTensorDescriptor_t input_desc,
     cudnnFilterDescriptor_t filter_desc,
     cudnnConvolutionDescriptor_t conv_desc,
@@ -207,7 +207,7 @@ cudnnConvolutionFwdAlgo_t TensorCoreCNNInference::findBestConvAlgorithm(
 
 
 
-void TensorCoreCNNInference::initializeLayers() {
+void TensorCNNInference::initializeLayers() {
     // Input layer: 3x32x32
     input_dims = {batch_size, 3, 32, 32};
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(input_desc, CUDNN_TENSOR_NCHW, 
@@ -354,7 +354,7 @@ void TensorCoreCNNInference::initializeLayers() {
 }
 
 
-void TensorCoreCNNInference::checkTensorCoreUsage() {
+void TensorCNNInference::checkTensorCoreUsage() {
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
@@ -402,7 +402,7 @@ void TensorCoreCNNInference::checkTensorCoreUsage() {
     std::cout << "\nWorkspace Size: " << workspace_size / (1024.0 * 1024.0) << " MB" << std::endl;
 }
 
-void TensorCoreCNNInference::infer(const std::vector<float>& input_data) {
+void TensorCNNInference::infer(const std::vector<float>& input_data) {
     const float alpha = 1.0f;
     const float beta = 0.0f;
 
@@ -501,7 +501,7 @@ void TensorCoreCNNInference::infer(const std::vector<float>& input_data) {
     CUDA_CHECK(cudaGetLastError());
 }
 
-std::vector<float> TensorCoreCNNInference::getOutput() {
+std::vector<float> TensorCNNInference::getOutput() {
     std::vector<float> output(10);
     
     // Copy the output from device to host
@@ -525,97 +525,8 @@ std::vector<float> TensorCoreCNNInference::getOutput() {
     return output;
 }
 
-void evaluate(const std::vector<std::vector<float>>& images, const std::vector<int>& labels) {
-    // Create CUDA events for timing
-    cudaEvent_t start, stop;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
-    
-    size_t correct_count = 0;
-    float total_time = 0.0f;
-    
-    std::cout << "\nStarting evaluation of " << images.size() << " images..." << std::endl;
 
-    // Process all images
-    for (size_t i = 0; i < images.size(); ++i) {
-        try {
-            // Time each inference
-            CUDA_CHECK(cudaEventRecord(start));
-            
-            infer(images[i]);
-            std::vector<float> output = getOutput();
-            
-            CUDA_CHECK(cudaEventRecord(stop));
-            CUDA_CHECK(cudaEventSynchronize(stop));
-            
-            float milliseconds = 0;
-            CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
-            total_time += milliseconds;
-
-            // Get prediction and accuracy
-            int predicted_label = std::distance(output.begin(), 
-                                              std::max_element(output.begin(), output.end()));
-            
-            if (predicted_label == labels[i]) {
-                ++correct_count;
-            }
-
-            // Print detailed info every 100 images
-            if (i % 100 == 0) {
-                // Calculate top 5 predictions
-                std::vector<std::pair<int, float>> scores;
-                for (size_t j = 0; j < output.size(); ++j) {
-                    scores.emplace_back(j, output[j]);
-                }
-                std::sort(scores.begin(), scores.end(),
-                         [](const auto& a, const auto& b) { return a.second > b.second; });
-
-                std::cout << "\nImage " << i << " details:" << std::endl;
-                std::cout << "Top 5 predictions:" << std::endl;
-                for (int k = 0; k < std::min(5, static_cast<int>(scores.size())); ++k) {
-                    std::cout << "  Class " << std::setw(2) << scores[k].first 
-                             << ": " << std::fixed << std::setprecision(4) 
-                             << (scores[k].second * 100.0f) << "%" << std::endl;
-                }
-                std::cout << "True label: " << labels[i] << std::endl;
-                std::cout << "Inference time: " << std::fixed << std::setprecision(3) 
-                         << milliseconds << " ms" << std::endl;
-                
-                // Print running accuracy
-                float running_accuracy = (static_cast<float>(correct_count) / (i + 1)) * 100.0f;
-                std::cout << "Running accuracy: " << std::fixed << std::setprecision(2) 
-                         << running_accuracy << "%" << std::endl;
-            }
-        }
-        catch (const std::exception& e) {
-            std::cerr << "Error processing image " << i << ": " << e.what() << std::endl;
-            continue;
-        }
-    }
-
-    // Calculate final statistics
-    float accuracy = static_cast<float>(correct_count) / images.size() * 100.0f;
-    float avg_time = total_time / images.size();
-    float throughput = 1000.0f / avg_time; // images per second
-
-    // Print final results
-    std::cout << "\n=== Final Results ===" << std::endl;
-    std::cout << "Total images processed: " << images.size() << std::endl;
-    std::cout << "Correct predictions: " << correct_count << std::endl;
-    std::cout << "Accuracy: " << std::fixed << std::setprecision(2) << accuracy << "%" << std::endl;
-    std::cout << "Average inference time: " << std::fixed << std::setprecision(3) 
-              << avg_time << " ms" << std::endl;
-    std::cout << "Throughput: " << std::fixed << std::setprecision(1) 
-              << throughput << " images/second" << std::endl;
-    std::cout << "Total evaluation time: " << std::fixed << std::setprecision(2) 
-              << total_time/1000.0f << " seconds" << std::endl;
-
-    // Cleanup
-    CUDA_CHECK(cudaEventDestroy(start));
-    CUDA_CHECK(cudaEventDestroy(stop));
-}
-
-TensorCoreCNNInference::~TensorCoreCNNInference() {
+TensorCNNInference::~TensorCNNInference() {
     // Free device memory
     cudaFree(d_input);
     cudaFree(d_conv1_weight);
@@ -665,7 +576,7 @@ TensorCoreCNNInference::~TensorCoreCNNInference() {
     cudnnDestroy(cudnn);
 }
 
-void TensorCoreCNNInference::loadWeights() {
+void TensorCNNInference::loadWeights() {
     std::cout << "Loading model weights..." << std::endl;
     
     // Load weights from binary files
@@ -708,7 +619,7 @@ void TensorCoreCNNInference::loadWeights() {
     CUDA_CHECK(cudaMemcpy(d_conv1_bias, conv1_biases.data(), 
                          conv1_bias_size * sizeof(float), cudaMemcpyHostToDevice));
     
-CUDA_CHECK(cudaMalloc(&d_conv2_weight, conv2_weights_size * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_conv2_weight, conv2_weights_size * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_conv2_bias, conv2_bias_size * sizeof(float)));
     CUDA_CHECK(cudaMemcpy(d_conv2_weight, conv2_weights.data(),
                          conv2_weights_size * sizeof(float), cudaMemcpyHostToDevice));
@@ -753,21 +664,112 @@ int main() {
         auto validation_labels = loadBinaryFile<int>("../../../data/validation/validation_labels.bin");
 
         std::vector<std::vector<float>> images;
-        const size_t image_size = 3 * 32 * 32;
+        size_t image_size = 3 * 32 * 32;
         for (size_t i = 0; i < validation_images.size(); i += image_size) {
-            images.push_back(std::vector<float>(
-                validation_images.begin() + i,
-                validation_images.begin() + i + image_size));
+            images.push_back(std::vector<float>(validation_images.begin() + i, 
+                                              validation_images.begin() + i + image_size));
         }
 
-        std::cout << "Creating TensorCore inference engine..." << std::endl;
-        TensorCoreCNNInference cnn_inference;
+        std::cout << "Creating Tensor Core inference engine..." << std::endl;
+        TensorCNNInference cnn;
         
-        std::cout << "Running evaluation on validation data..." << std::endl;
-        cnn_inference.evaluate(images, validation_labels);
+        // Print Tensor Core capabilities and configuration
+        cnn.checkTensorCoreUsage();
+
+        std::cout << "\n=== Starting Evaluation ===" << std::endl;
+        std::cout << "Model type: Tensor Core" << std::endl;
+
+        // Create CUDA events for timing
+        cudaEvent_t start, stop;
+        CUDA_CHECK(cudaEventCreate(&start));
+        CUDA_CHECK(cudaEventCreate(&stop));
+
+        size_t correct_count = 0;
+        float total_time = 0.0f;
+        int total_images = images.size();
+
+        // Warmup run
+        std::cout << "Performing warmup runs..." << std::endl;
+        for (int i = 0; i < 10; i++) {
+            cnn.infer(images[0]);
+        }
+
+        // Main evaluation loop
+        std::cout << "Starting main evaluation..." << std::endl;
+        for (size_t i = 0; i < total_images; ++i) {
+            try {
+                CUDA_CHECK(cudaEventRecord(start));
+                
+                cnn.infer(images[i]);
+                std::vector<float> output = cnn.getOutput();
+                
+                CUDA_CHECK(cudaEventRecord(stop));
+                CUDA_CHECK(cudaEventSynchronize(stop));
+                
+                float milliseconds = 0;
+                CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
+                total_time += milliseconds;
+
+                int predicted_label = std::distance(output.begin(), 
+                                                  std::max_element(output.begin(), output.end()));
+                
+                if (predicted_label == validation_labels[i]) {
+                    ++correct_count;
+                }
+
+                if (i % 100 == 0) {
+                    float running_accuracy = (static_cast<float>(correct_count) / (i + 1)) * 100.0f;
+                    std::cout << "\nProcessed " << i << "/" << total_images << " images" << std::endl;
+                    std::cout << "Running accuracy: " << std::fixed << std::setprecision(2) 
+                             << running_accuracy << "%" << std::endl;
+                    std::cout << "Current inference time: " << std::fixed << std::setprecision(3) 
+                             << milliseconds << " ms" << std::endl;
+                    
+                    // Print top 5 predictions for current image
+                    std::vector<std::pair<int, float>> scores;
+                    for (size_t j = 0; j < output.size(); ++j) {
+                        scores.emplace_back(j, output[j]);
+                    }
+                    std::sort(scores.begin(), scores.end(),
+                             [](const auto& a, const auto& b) { return a.second > b.second; });
+                    
+                    std::cout << "Top 5 predictions for current image:" << std::endl;
+                    for (int k = 0; k < std::min(5, static_cast<int>(scores.size())); ++k) {
+                        std::cout << "  Class " << std::setw(2) << scores[k].first 
+                                 << ": " << std::fixed << std::setprecision(4) 
+                                 << (scores[k].second * 100.0f) << "%" << std::endl;
+                    }
+                    std::cout << "True label: " << validation_labels[i] << std::endl;
+                }
+            }
+            catch (const std::exception& e) {
+                std::cerr << "Error processing image " << i << ": " << e.what() << std::endl;
+                continue;
+            }
+        }
+
+        // Print final statistics
+        float accuracy = static_cast<float>(correct_count) / total_images * 100.0f;
+        float avg_time = total_time / total_images;
+        float throughput = 1000.0f / avg_time;
+
+        std::cout << "\n=== Final Results ===" << std::endl;
+        std::cout << "Model type: Tensor Core" << std::endl;
+        std::cout << "Total images: " << total_images << std::endl;
+        std::cout << "Correct predictions: " << correct_count << std::endl;
+        std::cout << "Accuracy: " << std::fixed << std::setprecision(2) << accuracy << "%" << std::endl;
+        std::cout << "Average inference time: " << std::fixed << std::setprecision(3) 
+                  << avg_time << " ms" << std::endl;
+        std::cout << "Throughput: " << std::fixed << std::setprecision(1) 
+                  << throughput << " images/second" << std::endl;
+        std::cout << "Total evaluation time: " << std::fixed << std::setprecision(2) 
+                  << total_time/1000.0f << " seconds" << std::endl;
+
+        CUDA_CHECK(cudaEventDestroy(start));
+        CUDA_CHECK(cudaEventDestroy(stop));
 
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "Fatal error: " << e.what() << std::endl;
         return 1;
     }
 
