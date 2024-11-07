@@ -3,7 +3,7 @@ import numpy as np
 import os
 
 
-percicion = "fp32" # or "fp16"
+percicion = "fp16" # or "fp32"
 # Load the trained model weights
 state_dict = torch.load(f"../data/simple_cnn_{percicion}.pth")
 
