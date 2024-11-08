@@ -687,7 +687,33 @@ std::vector<float> CUDACNNInference::getOutput() {
     return output;
 }
 
-int main() {
+
+void parseArguments(int argc, char** argv, int& gpu_id, int& repeat_factor) {
+    if (argc >= 3) {
+        gpu_id = std::atoi(argv[1]);
+        repeat_factor = std::atoi(argv[2]);
+    } else {
+        std::cerr << "Usage: " << argv[0] << " <gpu_id> <repeat_factor>" << std::endl;
+        std::cerr << "Example: " << argv[0] << " 0 10" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+}
+
+
+int main(int argc, char** argv) {
+    int gpu_id = 0;
+    int repeat_factor = 1;
+
+    // Parse GPU ID and repeat factor from arguments
+    parseArguments(argc, argv, gpu_id, repeat_factor);
+
+    // Set the GPU device at runtime
+    CUDA_CHECK(cudaSetDevice(gpu_id));
+
+    std::cout << "Running on GPU: " << gpu_id << std::endl;
+    std::cout << "Repeat factor: " << repeat_factor << std::endl;
+
+    // Load validation data, set up the inference model, and evaluate
     try {
         std::cout << "Loading validation data..." << std::endl;
         auto validation_images = loadBinaryFile<float>("../../../data/validation/validation_images.bin");
@@ -703,8 +729,7 @@ int main() {
                                               validation_images.begin() + i + image_size));
         }
 
-        // Repeat the dataset to increase the total number of images
-        int repeat_factor = 10; // Adjust this factor as needed to increase the dataset size
+        // Repeat the dataset
         std::vector<std::vector<float>> repeated_images;
         std::vector<int> repeated_labels;
 
@@ -712,7 +737,7 @@ int main() {
             repeated_images.insert(repeated_images.end(), images.begin(), images.end());
             repeated_labels.insert(repeated_labels.end(), validation_labels.begin(), validation_labels.end());
         }
-
+        
         int total_images = repeated_images.size();
 
         std::cout << "Total images after repeating: " << total_images << std::endl;
