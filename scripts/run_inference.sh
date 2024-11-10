@@ -109,7 +109,6 @@ run_inference() {
     log_info "Completed GPU: $gpu_label with repeat factor: $repeat_factor"
 }
 
-
 # Parse command line arguments
 machine=""
 fp="32"  # Default to FP32
@@ -179,30 +178,22 @@ print_and_execute mkdir -p "$logs_dir"
 # Switch to appropriate branch based on FP precision
 switch_branch "$repo_path" "$fp"
 
-# Define GPU mappings
-declare -A gpu_mapping_sleepy=(
-    [RTX2080TI_0]="0"
-    [RTX2080TI_1]="1"
-    [RTX3090]="2"
-)
-
-declare -A gpu_mapping_sneezy=(
-    [A100_0]="0"
-    [A100_1]="1"
-    [A100_2]="2"
-    [A100_3]="3"
-)
-
 # Select appropriate GPU mapping based on machine
+gpu_labels=()
+gpu_ids=()
+
 if [ "$machine" == "sleepy" ]; then
-    declare -n gpu_mapping=gpu_mapping_sleepy
+    gpu_labels=("RTX2080TI_0" "RTX2080TI_1" "RTX3090")
+    gpu_ids=("0" "1" "2")
 else
-    declare -n gpu_mapping=gpu_mapping_sneezy
+    gpu_labels=("A100_0" "A100_1" "A100_2" "A100_3")
+    gpu_ids=("0" "1" "2" "3")
 fi
 
 # Run inference for each GPU and repeat factor
-for gpu_label in "${!gpu_mapping[@]}"; do
-    gpu_id="${gpu_mapping[$gpu_label]}"
+for i in "${!gpu_labels[@]}"; do
+    gpu_label="${gpu_labels[$i]}"
+    gpu_id="${gpu_ids[$i]}"
     for repeat_factor in 1 10 30 50 100; do
         run_inference "$machine" "$gpu_label" "$gpu_id" "$repeat_factor" "$bin_path" "$logs_dir"
     done
