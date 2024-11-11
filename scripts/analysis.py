@@ -61,22 +61,51 @@ def get_gpu_implementation_colors(model_precision):
 
 
 comparison_colors = {
-    ('Tensor Core', 'FP16'): '#1b5e20',  # Dark green
-    ('Tensor Core', 'FP32'): '#4CAF50',  # Light green
-    ('CUDA Core', 'FP16'): '#1a237e',    # Dark blue
-    ('CUDA Core', 'FP32'): '#3F51B5'     # Light blue
+    ('Tensor Core', 'FP16'): '#1b5e20',     # Dark green
+    ('Tensor Core', 'FP32'): '#b71c1c',     # Dark red
+    ('CUDA Core', 'FP16'): '#1a237e',       # Dark blue
+    ('CUDA Core', 'FP32'): '#4a148c',       # Dark purple
+    ('A100 - Tensor Core', 'FP16'): '#004d40',    # Dark teal
+    ('A100 - Tensor Core', 'FP32'): '#bf360c',    # Dark orange
+    ('A100 - CUDA Core', 'FP16'): '#311b92',      # Deep purple
+    ('A100 - CUDA Core', 'FP32'): '#880e4f',      # Dark pink
+    ('RTX3090 - Tensor Core', 'FP16'): '#33691e',  # Dark lime
+    ('RTX3090 - Tensor Core', 'FP32'): '#827717',  # Dark olive
+    ('RTX3090 - CUDA Core', 'FP16'): '#01579b',    # Dark cyan
+    ('RTX3090 - CUDA Core', 'FP32'): '#3e2723',    # Dark brown
+    ('RTX2080TI - Tensor Core', 'FP16'): '#263238',  # Dark gray-blue
+    ('RTX2080TI - Tensor Core', 'FP32'): '#ff6f00',  # Dark amber
+    ('RTX2080TI - CUDA Core', 'FP16'): '#1b0000',    # Very dark red
+    ('RTX2080TI - CUDA Core', 'FP32'): '#1a1a1a'     # Very dark gray
 }
 
-model_type_colors = {
-    'Tensor Core': '#1b5e20',  # Dark green
-    'CUDA Core': '#1a237e'     # Dark blue
-}
-
+# Different marker styles for better distinction
 comparison_markers = {
-    ('Tensor Core', 'FP16'): 'o',
-    ('Tensor Core', 'FP32'): 's',
-    ('CUDA Core', 'FP16'): '^',
-    ('CUDA Core', 'FP32'): 'D'
+    ('Tensor Core', 'FP16'): 'o',    # Circle
+    ('Tensor Core', 'FP32'): 's',    # Square
+    ('CUDA Core', 'FP16'): '^',      # Triangle up
+    ('CUDA Core', 'FP32'): 'D',      # Diamond
+    ('A100 - Tensor Core', 'FP16'): 'p',     # Pentagon
+    ('A100 - Tensor Core', 'FP32'): 'h',     # Hexagon
+    ('A100 - CUDA Core', 'FP16'): '8',       # Octagon
+    ('A100 - CUDA Core', 'FP32'): '*',       # Star
+    ('RTX3090 - Tensor Core', 'FP16'): 'P',  # Plus (filled)
+    ('RTX3090 - Tensor Core', 'FP32'): 'X',  # X (filled)
+    ('RTX3090 - CUDA Core', 'FP16'): '<',    # Triangle left
+    ('RTX3090 - CUDA Core', 'FP32'): '>',    # Triangle right
+    ('RTX2080TI - Tensor Core', 'FP16'): 'v',  # Triangle down
+    ('RTX2080TI - Tensor Core', 'FP32'): '1',  # Tri down
+    ('RTX2080TI - CUDA Core', 'FP16'): '2',    # Tri up
+    ('RTX2080TI - CUDA Core', 'FP32'): '3'     # Tri left
+}
+
+
+# Different line styles for added distinction
+line_styles = {
+    ('Tensor Core', 'FP16'): '-',      # Solid
+    ('Tensor Core', 'FP32'): '--',     # Dashed
+    ('CUDA Core', 'FP16'): '-.',       # Dash-dot
+    ('CUDA Core', 'FP32'): ':'         # Dotted
 }
 
 
@@ -243,117 +272,116 @@ def create_single_precision_plots(df, plots_dir, gpu_plots_dir, model_precision,
         plt.close()
 
 def create_comparison_plots(df, plots_dir, gpu_plots_dir):
-    # Combined throughput comparison across precisions
-    plt.figure(figsize=(14, 8))
+    plt.figure(figsize=(15, 10))
 
-    # Plot each combination separately for better control
-    for model_type in df['Model Type'].unique():
-        for precision in df['Precision'].unique():
-            data = df[(df['Model Type'] == model_type) & (df['Precision'] == precision)]
-            plt.plot(data['Number of Images'], data['Throughput (images/second)'],
-                    label=f'{model_type} - {precision}',
-                    color=comparison_colors[(model_type, precision)],
-                    marker=comparison_markers[(model_type, precision)],
-                    markersize=8,
-                    linewidth=2)
-
-    plt.title(r"\textbf{Performance Comparison: FP16 vs FP32 Implementations}")
-    plt.xlabel(r"\textbf{Batch Size (Number of Images)}")
-    plt.ylabel(r"\textbf{Processing Speed (Images/second)}")
-    plt.legend(title=r"\textbf{Implementation - Precision}", bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.savefig(f"{plots_dir}/throughput_comparison_fp16_vs_fp32.pdf",
-                bbox_inches="tight",
-                dpi=300)
-    plt.close()
-
-    # Create plot_data for bar plots
-    plot_data = df.copy()
-    plot_data['Number of Images (×10,000)'] = plot_data['Number of Images'] / 10000
-
-    # For bar plots, modify the title and labels to be more descriptive:
-    plt.figure(figsize=(14, 8))
-    sns.barplot(
-        data=plot_data,
-        x="Number of Images (×10,000)",
-        y="Throughput (images/second)",
-        hue="Model Type",
-        palette=model_type_colors,  # Use the simple palette here
-        alpha=0.8
-    )
-
-    plt.title(r"\textbf{Average Processing Speed by Implementation and Precision}")
-    plt.xlabel(r"\textbf{Batch Size (×10,000 Images)}")
-    plt.ylabel(r"\textbf{Average Processing Speed (Images/second)}")
-
-    plt.legend(title=r"\textbf{Implementation - Precision}",
-              bbox_to_anchor=(1.05, 1),
-              loc='upper left')
-
-    plt.savefig(f"{plots_dir}/average_processing_speed.pdf",
-                bbox_inches="tight",
-                dpi=300)
-    plt.close()
-
-    # Per-GPU comparison plots
+    # Create separate plots for each GPU
     for gpu in df['GPU'].unique():
         gpu_data = df[df['GPU'] == gpu]
-        plt.figure(figsize=(14, 8))
 
-        # Line plot for this GPU
+        plt.figure(figsize=(15, 10))
+        ax = plt.gca()
+
+        ax.grid(True, linestyle='--', alpha=0.3)
+        ax.set_axisbelow(True)
+
+        # Plot each line
         for model_type in gpu_data['Model Type'].unique():
             for precision in gpu_data['Precision'].unique():
                 data = gpu_data[(gpu_data['Model Type'] == model_type) &
                               (gpu_data['Precision'] == precision)]
-                plt.plot(data['Number of Images'], data['Throughput (images/second)'],
-                        label=f'{model_type} - {precision}',
-                        color=comparison_colors[(model_type, precision)],
-                        marker=comparison_markers[(model_type, precision)],
-                        markersize=8,
-                        linewidth=2)
 
-        plt.title(rf"\textbf{{Performance Comparison on {gpu}: FP16 vs FP32}}")
-        plt.xlabel(r"\textbf{Batch Size (Number of Images)}")
-        plt.ylabel(r"\textbf{Processing Speed (Images/second)}")
-        plt.legend(title=r"\textbf{Implementation - Precision}",
-                  bbox_to_anchor=(1.05, 1),
-                  loc='upper left')
-        plt.grid(True, linestyle='--', alpha=0.7)
+                data = data.sort_values('Number of Images')
+                gpu_key = f"{gpu} - {model_type}"
+                color_key = (gpu_key, precision)
+                marker_key = (gpu_key, precision)
+
+                plt.plot(data['Number of Images'],
+                        data['Throughput (images/second)'],
+                        label=f'{model_type} - {precision}',
+                        color=comparison_colors[color_key],
+                        marker=comparison_markers[marker_key],
+                        markersize=10,
+                        linewidth=3,
+                        markeredgewidth=2,
+                        markeredgecolor='white',
+                        markevery=0.2)
+
+        plt.title(rf"\textbf{{Performance Comparison on {gpu}}}",
+                 pad=20, fontsize=16)
+        plt.xlabel(r"\textbf{Batch Size (Million Images)}", labelpad=10)
+        plt.ylabel(r"\textbf{Throughput (Images/second)}", labelpad=10)
+
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x/1e6:.1f}'))
+
+        legend = plt.legend(title=r"\textbf{Implementation - Precision}",
+                          bbox_to_anchor=(1.05, 1),
+                          loc='upper left',
+                          borderaxespad=0,
+                          frameon=True,
+                          fancybox=True,
+                          shadow=True,
+                          fontsize=12)
+        legend.get_title().set_fontsize(13)
+
+        plt.tight_layout()
         plt.savefig(f"{gpu_plots_dir}/throughput_comparison_{gpu}_fp16_vs_fp32.pdf",
                     bbox_inches="tight",
                     dpi=300)
         plt.close()
 
-        # Bar plot for this GPU
-        gpu_plot_data = plot_data[plot_data['GPU'] == gpu]
-        plt.figure(figsize=(14, 8))
-        sns.barplot(
-            data=gpu_plot_data,
-            x="Number of Images (×10,000)",
-            y="Throughput (images/second)",
-            hue="Model Type",
-            palette=model_type_colors,  # Use the simple palette here
-            alpha=0.8
-        )
+    # Combined plot
+    plt.figure(figsize=(15, 10))
+    ax = plt.gca()
+    ax.grid(True, linestyle='--', alpha=0.3)
+    ax.set_axisbelow(True)
 
-        plt.title(rf"\textbf{{Average Processing Speed on {gpu} by Implementation and Precision}}")
-        plt.xlabel(r"\textbf{Batch Size (×10,000 Images)}")
-        plt.ylabel(r"\textbf{Average Processing Speed (Images/second)}")
-        plt.legend(title=r"\textbf{Implementation - Precision}",
-                  bbox_to_anchor=(1.05, 1),
-                  loc='upper left')
-        plt.grid(True, linestyle='--', alpha=0.7)
+    for gpu in df['GPU'].unique():
+        gpu_data = df[df['GPU'] == gpu]
+        for model_type in gpu_data['Model Type'].unique():
+            for precision in gpu_data['Precision'].unique():
+                data = gpu_data[(gpu_data['Model Type'] == model_type) &
+                              (gpu_data['Precision'] == precision)]
+                data = data.sort_values('Number of Images')
 
-        # Add explanatory text
-        plt.figtext(0.02, -0.1,
-                   f"This plot shows the average processing speed on {gpu} for each implementation and precision level\n" +
-                   "across different batch sizes. Higher bars indicate better performance (more images processed per second).",
-                   wrap=True, horizontalalignment='left', fontsize=10)
+                gpu_key = f"{gpu} - {model_type}"
+                color_key = (gpu_key, precision)
+                marker_key = (gpu_key, precision)
 
-        plt.savefig(f"{gpu_plots_dir}/average_processing_speed_{gpu}.pdf",
-                    bbox_inches="tight",
-                    dpi=300)
-        plt.close()
+                label = f'{gpu} - {model_type} - {precision}'
+                plt.plot(data['Number of Images'],
+                        data['Throughput (images/second)'],
+                        label=label,
+                        color=comparison_colors[color_key],
+                        marker=comparison_markers[marker_key],
+                        markersize=10,
+                        linewidth=3,
+                        markeredgewidth=2,
+                        markeredgecolor='white',
+                        markevery=0.2)
+
+    plt.title(r"\textbf{Performance Comparison Across All GPUs}",
+             pad=20, fontsize=16)
+    plt.xlabel(r"\textbf{Batch Size (Million Images)}", labelpad=10)
+    plt.ylabel(r"\textbf{Throughput (Images/second)}", labelpad=10)
+
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x/1e6:.1f}'))
+
+    legend = plt.legend(title=r"\textbf{GPU - Implementation - Precision}",
+                       bbox_to_anchor=(1.05, 1),
+                       loc='upper left',
+                       borderaxespad=0,
+                       frameon=True,
+                       fancybox=True,
+                       shadow=True,
+                       fontsize=12)
+    legend.get_title().set_fontsize(13)
+
+    plt.tight_layout()
+    plt.savefig(f"{plots_dir}/throughput_comparison_all_gpus.pdf",
+                bbox_inches="tight",
+                dpi=300)
+    plt.close()
+
 
 def print_statistics(df, together=False):
     if together:
