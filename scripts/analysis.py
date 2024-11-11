@@ -17,26 +17,31 @@ args = parser.parse_args()
 model_precision = f"FP{args.model}"
 log_dirs = [f"logs_fp{args.model}_sneezy", f"logs_fp{args.model}_sleepy"]
 
-# Define color schemes
-# Colors for individual GPU plots (Tensor vs CUDA)
-implementation_colors = {
-    "Tensor Core": "#1b5e20",     # Dark green for Tensor Cores
-    f"CUDA Core {model_precision}": "#1a237e"  # Dark blue for CUDA Cores
-}
+# Define color schemes based on model precision
+if args.model == 16:
+    implementation_colors = {
+        "Tensor Core": "#1b5e20",     # Dark green for Tensor Cores
+        "CUDA Core FP16": "#1a237e"   # Dark blue for CUDA Cores
+    }
+else:  # FP32
+    implementation_colors = {
+        "Tensor Core": "#1b5e20",    # Dark green for Tensor Cores
+        "CUDA Core": "#1a237e"       # Dark blue for CUDA Cores
+    }
 
 # Colors for combined plot
 gpu_implementation_colors = {
     'A100': {
         'Tensor Core': '#1b5e20',      # Dark green
-        f'CUDA Core {model_precision}': '#1a237e'  # Dark blue
+        'CUDA Core FP16' if args.model == 16 else 'CUDA Core': '#1a237e'  # Dark blue
     },
     'RTX3090': {
         'Tensor Core': '#4a148c',      # Dark purple
-        f'CUDA Core {model_precision}': '#311b92'  # Deep purple
+        'CUDA Core FP16' if args.model == 16 else 'CUDA Core': '#311b92'  # Deep purple
     },
     'RTX2080TI': {
         'Tensor Core': '#b71c1c',      # Dark red
-        f'CUDA Core {model_precision}': '#880e4f'  # Dark pink
+        'CUDA Core FP16' if args.model == 16 else 'CUDA Core': '#880e4f'  # Dark pink
     }
 }
 
@@ -75,6 +80,9 @@ def parse_log_file(file_path):
             repeat_factor = int(line.split(":")[1].strip())
         elif "Model type" in line:
             model_type = line.split(":")[1].strip()
+            # Handle different naming conventions for CUDA Core
+            if model_type == "CUDA Core" and args.model == 16:
+                model_type = "CUDA Core FP16"
         elif "Average inference time" in line:
             avg_inference_time = float(line.split(":")[1].replace("ms", "").strip())
         elif "Throughput" in line:
@@ -95,6 +103,7 @@ for log_dir in log_dirs:
         parsed_data = parse_log_file(file_path)
         data.append(parsed_data)
 
+# Convert to DataFrame
 df = pd.DataFrame(data)
 df['Number of Images'] = df['Repeat Factor'] * 10000
 grouped = df.groupby(["GPU", "Number of Images", "Model Type"]).mean().reset_index()
@@ -156,7 +165,7 @@ for gpu in gpu_models:
             ax=ax
         )
 
-# Enhance the combined plot
+# Enhance the plot
 ax.set_title(rf"\textbf{{Throughput Comparison Across GPUs: Tensor Cores vs CUDA Cores ({model_precision})}}", pad=20)
 ax.set_xlabel(r"\textbf{Number of Images}", labelpad=10)
 ax.set_ylabel(r"\textbf{Throughput (images/second)}", labelpad=10)
@@ -183,6 +192,55 @@ plt.savefig(f"{plots_dir}/combined_throughput_{model_precision.lower()}.pdf",
             bbox_inches="tight",
             dpi=300)
 plt.close()
+
+# Individual GPU plots
+for gpu_model in gpu_models:
+    gpu_data = grouped[grouped['GPU'].str.contains(gpu_model, case=False)]
+    if gpu_data.empty:
+        print(f"No data found for {gpu_model}. Skipping...")
+        continue
+
+    # Throughput Comparison
+    plt.figure(figsize=(10, 7))
+    sns.lineplot(data=gpu_data,
+                x="Number of Images",
+                y="Throughput (images/second)",
+                hue="Model Type",
+                marker="o",
+                palette=implementation_colors,
+                linewidth=2,
+                markersize=8)
+
+    plt.title(rf"\textbf{{Tensor Cores vs CUDA Cores Throughput on {gpu_model} ({model_precision})}}")
+    plt.xlabel(r"\textbf{Number of Images}")
+    plt.ylabel(r"\textbf{Throughput (images/second)}")
+    plt.legend(title=r"\textbf{Implementation}", bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.savefig(f"{gpu_plots_dir}/throughput_comparison_{gpu_model}_{model_precision.lower()}.pdf",
+                bbox_inches="tight",
+                dpi=300)
+    plt.close()
+
+    # Inference Time Comparison
+    plt.figure(figsize=(10, 7))
+    sns.lineplot(data=gpu_data,
+                x="Number of Images",
+                y="Average Inference Time (ms)",
+                hue="Model Type",
+                marker="o",
+                palette=implementation_colors,
+                linewidth=2,
+                markersize=8)
+
+    plt.title(rf"\textbf{{Tensor Cores vs CUDA Cores Inference Time on {gpu_model} ({model_precision})}}")
+    plt.xlabel(r"\textbf{Number of Images}")
+    plt.ylabel(r"\textbf{Average Inference Time (ms)}")
+    plt.legend(title=r"\textbf{Implementation}", bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.savefig(f"{gpu_plots_dir}/inference_time_comparison_{gpu_model}_{model_precision.lower()}.pdf",
+                bbox_inches="tight",
+                dpi=300)
+    plt.close()
 
 # Bar plots comparing average throughput - One per GPU and one combined
 plt.figure(figsize=(12, 7))
@@ -253,55 +311,6 @@ for gpu_model in gpu_models:
                     bbox_inches="tight",
                     dpi=300)
         plt.close()
-
-# Individual GPU plots
-for gpu_model in gpu_models:
-    gpu_data = grouped[grouped['GPU'].str.contains(gpu_model, case=False)]
-    if gpu_data.empty:
-        print(f"No data found for {gpu_model}. Skipping...")
-        continue
-
-    # Throughput Comparison
-    plt.figure(figsize=(10, 7))
-    sns.lineplot(data=gpu_data,
-                x="Number of Images",
-                y="Throughput (images/second)",
-                hue="Model Type",
-                marker="o",
-                palette=implementation_colors,
-                linewidth=2,
-                markersize=8)
-
-    plt.title(rf"\textbf{{Tensor Cores vs CUDA Cores Throughput on {gpu_model} ({model_precision})}}")
-    plt.xlabel(r"\textbf{Number of Images}")
-    plt.ylabel(r"\textbf{Throughput (images/second)}")
-    plt.legend(title=r"\textbf{Implementation}", bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.savefig(f"{gpu_plots_dir}/throughput_comparison_{gpu_model}_{model_precision.lower()}.pdf",
-                bbox_inches="tight",
-                dpi=300)
-    plt.close()
-
-    # Inference Time Comparison
-    plt.figure(figsize=(10, 7))
-    sns.lineplot(data=gpu_data,
-                x="Number of Images",
-                y="Average Inference Time (ms)",
-                hue="Model Type",
-                marker="o",
-                palette=implementation_colors,
-                linewidth=2,
-                markersize=8)
-
-    plt.title(rf"\textbf{{Tensor Cores vs CUDA Cores Inference Time on {gpu_model} ({model_precision})}}")
-    plt.xlabel(r"\textbf{Number of Images}")
-    plt.ylabel(r"\textbf{Average Inference Time (ms)}")
-    plt.legend(title=r"\textbf{Implementation}", bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.savefig(f"{gpu_plots_dir}/inference_time_comparison_{gpu_model}_{model_precision.lower()}.pdf",
-                bbox_inches="tight",
-                dpi=300)
-    plt.close()
 
 # Print summary statistics
 print(f"\nSummary Statistics for {model_precision} Model:")
