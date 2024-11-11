@@ -224,8 +224,8 @@ void CUDACNNInference::loadWeights() {
     std::cout << "Loading model weights..." << std::endl;
     
     // Conv1 weights
-    auto conv1_weights = loadBinaryFile<float>("../../../data/weights/conv1.weight_fp32.bin");
-    auto conv1_biases = loadBinaryFile<float>("../../../data/weights/conv1.bias_fp32.bin");
+    auto conv1_weights = loadBinaryFile<float>("../../data/weights/conv1.weight_fp32.bin");
+    auto conv1_biases = loadBinaryFile<float>("../../data/weights/conv1.bias_fp32.bin");
     
     //  print first few weights for verification (debugging)
     // std::cout << "Conv1 weights first values: ";
@@ -243,22 +243,22 @@ void CUDACNNInference::loadWeights() {
     }
 
     // Conv2 weights
-    auto conv2_weights = loadBinaryFile<float>("../../../data/weights/conv2.weight_fp32.bin");
-    auto conv2_biases = loadBinaryFile<float>("../../../data/weights/conv2.bias_fp32.bin");
+    auto conv2_weights = loadBinaryFile<float>("../../data/weights/conv2.weight_fp32.bin");
+    auto conv2_biases = loadBinaryFile<float>("../../data/weights/conv2.bias_fp32.bin");
     
     const size_t conv2_weights_size = 64 * 32 * 3 * 3;
     const size_t conv2_bias_size = 64;
     
     // FC1 weights
-    auto fc1_weights = loadBinaryFile<float>("../../../data/weights/fc1.weight_fp32.bin");
-    auto fc1_biases = loadBinaryFile<float>("../../../data/weights/fc1.bias_fp32.bin");
+    auto fc1_weights = loadBinaryFile<float>("../../data/weights/fc1.weight_fp32.bin");
+    auto fc1_biases = loadBinaryFile<float>("../../data/weights/fc1.bias_fp32.bin");
     
     const size_t fc1_weights_size = 128 * (64 * 8 * 8);
     const size_t fc1_bias_size = 128;  // Added definition
     
     // FC2 weights
-    auto fc2_weights = loadBinaryFile<float>("../../../data/weights/fc2.weight_fp32.bin");
-    auto fc2_biases = loadBinaryFile<float>("../../../data/weights/fc2.bias_fp32.bin");
+    auto fc2_weights = loadBinaryFile<float>("../../data/weights/fc2.weight_fp32.bin");
+    auto fc2_biases = loadBinaryFile<float>("../../data/weights/fc2.bias_fp32.bin");
     
     const size_t fc2_weights_size = 10 * 128;
     const size_t fc2_bias_size = 10;  // Added definition
@@ -716,8 +716,8 @@ int main(int argc, char** argv) {
     // Load validation data, set up the inference model, and evaluate
     try {
         std::cout << "Loading validation data..." << std::endl;
-        auto validation_images = loadBinaryFile<float>("../../../data/validation/validation_images.bin");
-        auto validation_labels = loadBinaryFile<int>("../../../data/validation/validation_labels.bin");
+        auto validation_images = loadBinaryFile<float>("../../data/validation/validation_images.bin");
+        auto validation_labels = loadBinaryFile<int>("../../data/validation/validation_labels.bin");
 
         // Original image size for CIFAR-10 (3 channels, 32x32 resolution)
         size_t image_size = 3 * 32 * 32;

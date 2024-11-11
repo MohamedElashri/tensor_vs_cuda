@@ -35,6 +35,13 @@ log_error() {
     echo -e "${red}[ERROR]${nc} $(date '+%Y-%m-%d %H:%M:%S') - $1" >&2
 }
 
+get_absolute_path() {
+    local path=$1
+    echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+}
+
+
+
 # Command execution with logging
 print_and_execute() {
     echo -e "${green}+ $@${nc}" >&2
@@ -78,6 +85,40 @@ verify_binary() {
     fi
 }
 
+# Function to create the expected data directory structure within bin_path
+create_data_symlink() {
+    local bin_path=$1
+    local repo_path=$2
+
+    # The binaries expect ../../../data relative to their location
+    # So if binaries are in inference/build/, we need to create the link at the right level
+    local link_parent="${bin_path}/../../.."
+    local link_path="${link_parent}/data"
+    local target_path="${repo_path}/data"
+
+    # Create parent directories if they don't exist
+    mkdir -p "${link_parent}"
+
+    # Create the symlink if it doesn't already exist
+    if [ ! -L "$link_path" ]; then
+        log_info "Creating symlink for data directory: $target_path -> $link_path"
+        ln -s "$target_path" "$link_path"
+    fi
+}
+
+
+# Function to remove symlink after execution
+
+remove_data_symlink() {
+    local bin_path=$1
+    local link_path="${bin_path}/../../.."
+    
+    if [ -L "${link_path}/data" ]; then
+        log_info "Removing symlink for data directory at ${link_path}/data"
+        rm "${link_path}/data"
+    fi
+}
+
 # Function to run inference on specified machine
 run_inference() {
     local machine=$1
@@ -88,19 +129,18 @@ run_inference() {
     local logs_dir=$6
     local precision=$7
 
-    # Determine binary based on precision
+    # Determine binary names
     local cuda_binary="${bin_path}/inference_cuda_fp${precision}"
     local tensor_binary="${bin_path}/inference_tensor_fp${precision}"
 
     log_info "Running on GPU: $gpu_label with repeat factor: $repeat_factor and FP precision: $precision"
 
-    # Run inference_cuda and save log
-    print_and_execute "CUDA_VISIBLE_DEVICES=$gpu_id ${cuda_binary} 0 $repeat_factor > '${logs_dir}/${machine}_${gpu_label}_cuda_fp${precision}_rf${repeat_factor}.log'"
+    # Run inference_cuda and save log (from the build directory)
+    cd "$bin_path"
+    print_and_execute "CUDA_VISIBLE_DEVICES=$gpu_id ./inference_cuda_fp${precision} 0 $repeat_factor > '${logs_dir}/${machine}_${gpu_label}_cuda_fp16_rf${repeat_factor}.log'"
 
     # Run inference_tensor and save log
-    print_and_execute "CUDA_VISIBLE_DEVICES=$gpu_id ${tensor_binary} 0 $repeat_factor > '${logs_dir}/${machine}_${gpu_label}_tensor_fp${precision}_rf${repeat_factor}.log'"
-
-    log_info "Completed GPU: $gpu_label with repeat factor: $repeat_factor and FP precision: $precision"
+    print_and_execute "CUDA_VISIBLE_DEVICES=$gpu_id ./inference_tensor_fp${precision} 0 $repeat_factor > '${logs_dir}/${machine}_${gpu_label}_tensor_fp16_rf${repeat_factor}.log'"
 }
 
 # Parse command line arguments
@@ -143,6 +183,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+
+repo_path=$(get_absolute_path "$repo_path")
+bin_path=$(get_absolute_path "$bin_path")
+
 # Validate required arguments
 if [ -z "$machine" ] || [ -z "$repo_path" ] || [ -z "$bin_path" ]; then
     log_error "Missing required arguments"
@@ -169,6 +213,9 @@ verify_binary "${bin_path}/inference_tensor_fp${fp}"
 logs_dir="$(pwd)/logs_fp${fp}_${machine}"
 print_and_execute mkdir -p "$logs_dir"
 
+# Create temporary data symlink for relative paths
+create_data_symlink "$bin_path" "$repo_path"
+
 # Select appropriate GPU mapping based on machine
 gpu_labels=()
 gpu_ids=()
@@ -189,6 +236,9 @@ for i in "${!gpu_labels[@]}"; do
         run_inference "$machine" "$gpu_label" "$gpu_id" "$repeat_factor" "$bin_path" "$logs_dir" "$fp"
     done
 done
+
+# Clean up the temporary symlink
+remove_data_symlink "$bin_path"
 
 log_info "All runs completed on $machine with FP$fp precision."
 log_info "Logs saved in: $logs_dir"
