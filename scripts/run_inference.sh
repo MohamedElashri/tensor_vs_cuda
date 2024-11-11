@@ -1,3 +1,16 @@
+# Usage: Run inference on specified machine with given FP precision
+# Examples:
+# ./run_inference.sh --machine sleepy --fp 16 --repo-path /path/to/repo --bin-path /path/to/binaries
+# ./run_inference.sh --machine sneezy --fp 32 --repo-path /path/to/repo --bin-path /path/to/binaries
+# Options:
+#  --machine    Machine to run on (sleepy/sneezy)
+#  --fp         Floating point precision (16/32, default: 32)
+#  --repo-path  Path to the repository root directory (required)
+#  --bin-path   Path to the directory containing inference binaries (required)
+#  --help       Show this help message and exit
+
+
+
 #!/bin/bash
 
 # Enable strict error handling
@@ -65,21 +78,6 @@ verify_binary() {
     fi
 }
 
-# Function to switch git branch based on FP precision
-switch_branch() {
-    local repo_path=$1
-    local fp=$2
-    
-    # Change to repo directory
-    cd "$repo_path"
-    
-    if [ "$fp" == "16" ]; then
-        print_and_execute git checkout fp16
-    else
-        print_and_execute git checkout master
-    fi
-}
-
 # Function to run inference on specified machine
 run_inference() {
     local machine=$1
@@ -88,25 +86,21 @@ run_inference() {
     local repeat_factor=$4
     local bin_path=$5
     local logs_dir=$6
-    
-    log_info "Running on GPU: $gpu_label with repeat factor: $repeat_factor"
-    
-    # Store current directory
-    local current_dir=$(pwd)
-    
-    # Change to build directory
-    cd "$bin_path"
-    
+    local precision=$7
+
+    # Determine binary based on precision
+    local cuda_binary="${bin_path}/inference_cuda_fp${precision}"
+    local tensor_binary="${bin_path}/inference_tensor_fp${precision}"
+
+    log_info "Running on GPU: $gpu_label with repeat factor: $repeat_factor and FP precision: $precision"
+
     # Run inference_cuda and save log
-    print_and_execute "CUDA_VISIBLE_DEVICES=$gpu_id ./inference_cuda 0 $repeat_factor > '${logs_dir}/${machine}_${gpu_label}_cuda_rf${repeat_factor}.log'"
-    
+    print_and_execute "CUDA_VISIBLE_DEVICES=$gpu_id ${cuda_binary} 0 $repeat_factor > '${logs_dir}/${machine}_${gpu_label}_cuda_fp${precision}_rf${repeat_factor}.log'"
+
     # Run inference_tensor and save log
-    print_and_execute "CUDA_VISIBLE_DEVICES=$gpu_id ./inference_tensor 0 $repeat_factor > '${logs_dir}/${machine}_${gpu_label}_tensor_rf${repeat_factor}.log'"
-    
-    # Return to original directory
-    cd "$current_dir"
-    
-    log_info "Completed GPU: $gpu_label with repeat factor: $repeat_factor"
+    print_and_execute "CUDA_VISIBLE_DEVICES=$gpu_id ${tensor_binary} 0 $repeat_factor > '${logs_dir}/${machine}_${gpu_label}_tensor_fp${precision}_rf${repeat_factor}.log'"
+
+    log_info "Completed GPU: $gpu_label with repeat factor: $repeat_factor and FP precision: $precision"
 }
 
 # Parse command line arguments
@@ -168,15 +162,12 @@ verify_directory "$repo_path" "Repository"
 verify_directory "$bin_path" "Binary"
 
 # Verify binaries exist and are executable
-verify_binary "${bin_path}/inference_cuda"
-verify_binary "${bin_path}/inference_tensor"
+verify_binary "${bin_path}/inference_cuda_fp${fp}"
+verify_binary "${bin_path}/inference_tensor_fp${fp}"
 
 # Create logs directory with precision and machine name
 logs_dir="$(pwd)/logs_fp${fp}_${machine}"
 print_and_execute mkdir -p "$logs_dir"
-
-# Switch to appropriate branch based on FP precision
-switch_branch "$repo_path" "$fp"
 
 # Select appropriate GPU mapping based on machine
 gpu_labels=()
@@ -195,7 +186,7 @@ for i in "${!gpu_labels[@]}"; do
     gpu_label="${gpu_labels[$i]}"
     gpu_id="${gpu_ids[$i]}"
     for repeat_factor in 1 10 30 50 100; do
-        run_inference "$machine" "$gpu_label" "$gpu_id" "$repeat_factor" "$bin_path" "$logs_dir"
+        run_inference "$machine" "$gpu_label" "$gpu_id" "$repeat_factor" "$bin_path" "$logs_dir" "$fp"
     done
 done
 

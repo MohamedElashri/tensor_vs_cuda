@@ -49,10 +49,10 @@ std::vector<T> loadBinaryFile(const std::string& filename) {
         }                                                                        \
     }
 
-class SimpleCNNInference {
+class CUDACNNInference {
 public:
-    SimpleCNNInference();
-    ~SimpleCNNInference();
+    CUDACNNInference();
+    ~CUDACNNInference();
     void loadWeights();
     void initializeLayers();
     void infer(const std::vector<float>& input_data);
@@ -120,7 +120,7 @@ private:
     LayerDims conv1_dims, pool1_dims, conv2_dims, pool2_dims, fc1_dims, fc2_dims;
 };
 
-SimpleCNNInference::SimpleCNNInference() {
+CUDACNNInference::CUDACNNInference() {
     std::cout << "Initializing CuDNN..." << std::endl;
     CUDNN_CHECK(cudnnCreate(&cudnn));
 
@@ -159,7 +159,7 @@ SimpleCNNInference::SimpleCNNInference() {
     initializeLayers();
 }
 
-SimpleCNNInference::~SimpleCNNInference() {
+CUDACNNInference::~CUDACNNInference() {
     // Free device memory for layer outputs
     cudaFree(d_input);
     cudaFree(d_conv1_output);
@@ -220,19 +220,19 @@ SimpleCNNInference::~SimpleCNNInference() {
     cudnnDestroy(cudnn);
 }
 
-void SimpleCNNInference::loadWeights() {
+void CUDACNNInference::loadWeights() {
     std::cout << "Loading model weights..." << std::endl;
     
     // Conv1 weights
     auto conv1_weights = loadBinaryFile<float>("../../../data/weights/conv1.weight_fp32.bin");
     auto conv1_biases = loadBinaryFile<float>("../../../data/weights/conv1.bias_fp32.bin");
     
-    // Debug print first few weights for verification
-    std::cout << "Conv1 weights first values: ";
-    for(int i = 0; i < 5; i++) {
-        std::cout << conv1_weights[i] << " ";
-    }
-    std::cout << std::endl;
+    //  print first few weights for verification (debugging)
+    // std::cout << "Conv1 weights first values: ";
+    // for(int i = 0; i < 5; i++) {
+    //     std::cout << conv1_weights[i] << " ";
+    // }
+    // std::cout << std::endl;
     
     const size_t conv1_weights_size = 32 * 3 * 3 * 3;
     const size_t conv1_bias_size = 32;
@@ -310,7 +310,7 @@ void SimpleCNNInference::loadWeights() {
 }
 
 
-void SimpleCNNInference::initializeLayers() {
+void CUDACNNInference::initializeLayers() {
     // Input: 3x32x32
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(input_desc, CUDNN_TENSOR_NCHW, 
         CUDNN_DATA_FLOAT, batch_size, 3, 32, 32));
@@ -550,7 +550,7 @@ void checkFilterDimensions(cudnnFilterDescriptor_t desc, const char* name) {
     std::cout << name << " filter dimensions: " << k << "x" << c << "x" << h << "x" << w << std::endl;
 }
 
-void SimpleCNNInference::infer(const std::vector<float>& input_data) {
+void CUDACNNInference::infer(const std::vector<float>& input_data) {
     const float alpha = 1.0f;
     const float beta = 0.0f;
     
@@ -655,54 +655,8 @@ void SimpleCNNInference::infer(const std::vector<float>& input_data) {
     }
 }
 
-void SimpleCNNInference::evaluate(const std::vector<std::vector<float>>& images, const std::vector<int>& labels) {
-    size_t correct_count = 0;
-    auto start = std::chrono::high_resolution_clock::now();
 
-    for (size_t i = 0; i < images.size(); ++i) {
-        try {
-            infer(images[i]);
-            std::vector<float> output = getOutput();
-            int predicted_label = std::distance(output.begin(), std::max_element(output.begin(), output.end()));
-            
-            // Print top 5 scores for debugging
-            std::vector<std::pair<int, float>> scores;
-            for (int j = 0; j < output.size(); ++j) {
-                scores.emplace_back(j, output[j]);
-            }
-            std::sort(scores.begin(), scores.end(), [](const auto& a, const auto& b) {
-                return a.second > b.second;
-            });
-            
-            if (i % 100 == 0) {
-                std::cout << "Image " << i << " - Top 5 Predictions:" << std::endl;
-                for (int k = 0; k < std::min(5, static_cast<int>(scores.size())); ++k) {
-                    std::cout << "Class " << scores[k].first << " - Score: " << scores[k].second << std::endl;
-                }
-                std::cout << "True label: " << labels[i] << std::endl;
-            }
-
-            if (predicted_label == labels[i]) {
-                ++correct_count;
-            }
-        }
-        catch (const std::exception& e) {
-            std::cerr << "Error processing image " << i << ": " << e.what() << std::endl;
-            // Skip this image and continue with the next one
-            continue;
-        }
-    }
-
-    float accuracy = static_cast<float>(correct_count) / images.size() * 100.0f;
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-
-    std::cout << "Accuracy: " << accuracy << "%" << std::endl;
-    double throughput = images.size() / elapsed.count();
-    std::cout << "Throughput: " << throughput << " images/second" << std::endl;
-}
-
-std::vector<float> SimpleCNNInference::getOutput() {
+std::vector<float> CUDACNNInference::getOutput() {
     std::vector<float> output(10);
     
     // Copy the output from device to host
@@ -733,21 +687,161 @@ std::vector<float> SimpleCNNInference::getOutput() {
     return output;
 }
 
-int main() {
-    std::cout << "Loading validation data..." << std::endl;
-    auto validation_images = loadBinaryFile<float>("../../../data/validation/validation_images.bin");
-    auto validation_labels = loadBinaryFile<int>("../../../data/validation/validation_labels.bin");
 
-    std::vector<std::vector<float>> images;
-    size_t image_size = 3 * 32 * 32;
-    for (size_t i = 0; i < validation_images.size(); i += image_size) {
-        images.push_back(std::vector<float>(validation_images.begin() + i, validation_images.begin() + i + image_size));
+void parseArguments(int argc, char** argv, int& gpu_id, int& repeat_factor) {
+    if (argc >= 3) {
+        gpu_id = std::atoi(argv[1]);
+        repeat_factor = std::atoi(argv[2]);
+    } else {
+        std::cerr << "Usage: " << argv[0] << " <gpu_id> <repeat_factor>" << std::endl;
+        std::cerr << "Example: " << argv[0] << " 0 10" << std::endl;
+        std::exit(EXIT_FAILURE);
     }
+}
 
-    std::cout << "Creating inference engine..." << std::endl;
-    SimpleCNNInference cnn_inference;
-    std::cout << "Running evaluation on validation data..." << std::endl;
-    cnn_inference.evaluate(images, validation_labels);
+
+int main(int argc, char** argv) {
+    int gpu_id = 0;
+    int repeat_factor = 1;
+
+    // Parse GPU ID and repeat factor from arguments
+    parseArguments(argc, argv, gpu_id, repeat_factor);
+
+    // Set the GPU device at runtime
+    CUDA_CHECK(cudaSetDevice(gpu_id));
+
+    std::cout << "Running on GPU: " << gpu_id << std::endl;
+    std::cout << "Repeat factor: " << repeat_factor << std::endl;
+
+    // Load validation data, set up the inference model, and evaluate
+    try {
+        std::cout << "Loading validation data..." << std::endl;
+        auto validation_images = loadBinaryFile<float>("../../../data/validation/validation_images.bin");
+        auto validation_labels = loadBinaryFile<int>("../../../data/validation/validation_labels.bin");
+
+        // Original image size for CIFAR-10 (3 channels, 32x32 resolution)
+        size_t image_size = 3 * 32 * 32;
+
+        // Organize the original data into individual images
+        std::vector<std::vector<float>> images;
+        for (size_t i = 0; i < validation_images.size(); i += image_size) {
+            images.push_back(std::vector<float>(validation_images.begin() + i, 
+                                              validation_images.begin() + i + image_size));
+        }
+
+        // Repeat the dataset
+        std::vector<std::vector<float>> repeated_images;
+        std::vector<int> repeated_labels;
+
+        for (int i = 0; i < repeat_factor; ++i) {
+            repeated_images.insert(repeated_images.end(), images.begin(), images.end());
+            repeated_labels.insert(repeated_labels.end(), validation_labels.begin(), validation_labels.end());
+        }
+        
+        int total_images = repeated_images.size();
+
+        std::cout << "Total images after repeating: " << total_images << std::endl;
+
+        std::cout << "Creating CUDA inference engine..." << std::endl;
+        CUDACNNInference cnn;
+
+        std::cout << "\n=== Starting Evaluation ===" << std::endl;
+        std::cout << "Model type: CUDA Core" << std::endl;
+
+        // Create CUDA events for timing
+        cudaEvent_t start, stop;
+        CUDA_CHECK(cudaEventCreate(&start));
+        CUDA_CHECK(cudaEventCreate(&stop));
+
+        size_t correct_count = 0;
+        float total_time = 0.0f;
+
+        // Warmup run
+        std::cout << "Performing warmup runs..." << std::endl;
+        for (int i = 0; i < 10; i++) {
+            cnn.infer(repeated_images[0]);
+        }
+
+        // Main evaluation loop
+        std::cout << "Starting main evaluation..." << std::endl;
+        for (size_t i = 0; i < total_images; ++i) {
+            try {
+                CUDA_CHECK(cudaEventRecord(start));
+                
+                cnn.infer(repeated_images[i]);
+                std::vector<float> output = cnn.getOutput();
+                
+                CUDA_CHECK(cudaEventRecord(stop));
+                CUDA_CHECK(cudaEventSynchronize(stop));
+                
+                float milliseconds = 0;
+                CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
+                total_time += milliseconds;
+
+                int predicted_label = std::distance(output.begin(), 
+                                                    std::max_element(output.begin(), output.end()));
+                
+                if (predicted_label == repeated_labels[i]) {
+                    ++correct_count;
+                }
+
+                // if (i % 100 == 0) {
+
+                //     // Print running statistics (debugging)
+                //     // float running_accuracy = (static_cast<float>(correct_count) / (i + 1)) * 100.0f;
+                //     // std::cout << "\nProcessed " << i + 1 << "/" << total_images << " images" << std::endl;
+                //     // std::cout << "Running accuracy: " << std::fixed << std::setprecision(2) 
+                //     //           << running_accuracy << "%" << std::endl;
+                //     // std::cout << "Current inference time: " << std::fixed << std::setprecision(3) 
+                //     //           << milliseconds << " ms" << std::endl;
+                    
+                //     // Print top 5 predictions for current image (debugging)
+                //     // std::vector<std::pair<int, float>> scores;
+                //     // for (size_t j = 0; j < output.size(); ++j) {
+                //     //     scores.emplace_back(j, output[j]);
+                //     // }
+                //     // std::sort(scores.begin(), scores.end(),
+                //     //           [](const auto& a, const auto& b) { return a.second > b.second; });
+                    
+                //     // std::cout << "Top 5 predictions for current image:" << std::endl;
+                //     // for (int k = 0; k < std::min(5, static_cast<int>(scores.size())); ++k) {
+                //     //     std::cout << "  Class " << std::setw(2) << scores[k].first 
+                //     //               << ": " << std::fixed << std::setprecision(4) 
+                //     //               << (scores[k].second * 100.0f) << "%" << std::endl;
+                //     // }
+                //     // std::cout << "True label: " << repeated_labels[i] << std::endl;
+                // }
+            }
+            catch (const std::exception& e) {
+                std::cerr << "Error processing image " << i << ": " << e.what() << std::endl;
+                continue;
+            }
+        }
+
+        // Print final statistics
+        float accuracy = static_cast<float>(correct_count) / total_images * 100.0f;
+        float avg_time = total_time / total_images;
+        float throughput = 1000.0f / avg_time;
+
+        std::cout << "\n=== Final Results ===" << std::endl;
+        std::cout << "Model type: CUDA Core" << std::endl;
+        std::cout << "Total images: " << total_images << std::endl;
+        std::cout << "Correct predictions: " << correct_count << std::endl;
+        std::cout << "Accuracy: " << std::fixed << std::setprecision(2) << accuracy << "%" << std::endl;
+        std::cout << "Average inference time: " << std::fixed << std::setprecision(3) 
+                  << avg_time << " ms" << std::endl;
+        std::cout << "Throughput: " << std::fixed << std::setprecision(1) 
+                  << throughput << " images/second" << std::endl;
+        std::cout << "Total evaluation time: " << std::fixed << std::setprecision(2) 
+                  << total_time / 1000.0f << " seconds" << std::endl;
+
+        CUDA_CHECK(cudaEventDestroy(start));
+        CUDA_CHECK(cudaEventDestroy(stop));
+
+    } catch (const std::exception& e) {
+        std::cerr << "Fatal error: " << e.what() << std::endl;
+        return 1;
+    }
 
     return 0;
 }
