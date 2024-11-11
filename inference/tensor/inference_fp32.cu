@@ -1,5 +1,4 @@
-// CUDA Cores Inference Engine
-
+// CUDA Cores + Tensor Cores Inference Engine
 
 #include </usr/include/cudnn.h>
 #include <cuda_runtime.h>
@@ -29,36 +28,36 @@ std::vector<T> loadBinaryFile(const std::string& filename) {
 }
 
 // Helper function to handle CuDNN errors
-#define CUDNN_CHECK(call)                                                         \
-    {                                                                             \
-        cudnnStatus_t err = call;                                                 \
-        if (err != CUDNN_STATUS_SUCCESS) {                                        \
-            std::cerr << "CuDNN Error: " << cudnnGetErrorString(err) << std::endl; \
-            std::exit(EXIT_FAILURE);                                              \
-        }                                                                         \
-    }
+#define CUDNN_CHECK(call) {                                                        \
+    cudnnStatus_t err = call;                                                     \
+    if (err != CUDNN_STATUS_SUCCESS) {                                           \
+        std::cerr << "CuDNN Error at " << __FILE__ << ":" << __LINE__ << ": "   \
+                  << cudnnGetErrorString(err) << std::endl;                      \
+        std::exit(EXIT_FAILURE);                                                 \
+    }                                                                            \
+}
 
 // Helper function to handle CUDA errors
+#define CUDA_CHECK(call) {                                                        \
+    cudaError_t err = call;                                                      \
+    if (err != cudaSuccess) {                                                    \
+        std::cerr << "CUDA Error at " << __FILE__ << ":" << __LINE__ << ": "    \
+                  << cudaGetErrorString(err) << std::endl;                       \
+        std::exit(EXIT_FAILURE);                                                 \
+    }                                                                            \
+}
 
-#define CUDA_CHECK(call)                                                         \
-    {                                                                            \
-        cudaError_t err = call;                                                  \
-        if (err != cudaSuccess) {                                                \
-            std::cerr << "CUDA Error: " << cudaGetErrorString(err) << std::endl; \
-            std::exit(EXIT_FAILURE);                                             \
-        }                                                                        \
-    }
-
-class CUDACNNInference {
+class TensorCNNInference {
 public:
-    CUDACNNInference();
-    ~CUDACNNInference();
+    TensorCNNInference();
+    ~ TensorCNNInference();
     void loadWeights();
     void initializeLayers();
+    void checkTensorCoreUsage();
     void infer(const std::vector<float>& input_data);
     std::vector<float> getOutput();
-    void evaluate(const std::vector<std::vector<float>>& images, const std::vector<int>& labels);
-
+    void evaluate(const std::vector<std::vector<float>>& images, 
+                 const std::vector<int>& labels);
 private:
     cudnnHandle_t cudnn;
     
@@ -69,12 +68,14 @@ private:
     cudnnTensorDescriptor_t conv2_output_desc;
     cudnnTensorDescriptor_t pool2_output_desc;
     cudnnTensorDescriptor_t pool2_flat_desc;
-    cudnnTensorDescriptor_t fc1_input_desc;
     cudnnTensorDescriptor_t fc1_output_desc;
-    cudnnTensorDescriptor_t fc2_input_desc;
     cudnnTensorDescriptor_t fc2_output_desc;
-    cudnnFilterDescriptor_t fc1_weight_desc;
-    cudnnFilterDescriptor_t fc2_weight_desc;
+
+    // Filter descriptors
+    cudnnFilterDescriptor_t conv1_filter_desc;
+    cudnnFilterDescriptor_t conv2_filter_desc;
+    cudnnFilterDescriptor_t fc1_filter_desc;
+    cudnnFilterDescriptor_t fc2_filter_desc;
     
     // Bias descriptors
     cudnnTensorDescriptor_t conv1_bias_desc;
@@ -83,12 +84,8 @@ private:
     cudnnTensorDescriptor_t fc2_bias_desc;
     
     // Convolution descriptors
-    cudnnFilterDescriptor_t conv1_filter_desc;
-    cudnnFilterDescriptor_t conv2_filter_desc;
     cudnnConvolutionDescriptor_t conv1_desc;
     cudnnConvolutionDescriptor_t conv2_desc;
-    
-    // FC layer convolution descriptors
     cudnnConvolutionDescriptor_t fc1_desc;
     cudnnConvolutionDescriptor_t fc2_desc;
     
@@ -96,8 +93,11 @@ private:
     cudnnActivationDescriptor_t relu_activation;
     cudnnPoolingDescriptor_t pooling_desc;
 
-    int fc1_input_size;
-
+    // Convolution algorithms
+    cudnnConvolutionFwdAlgo_t conv1_algo;
+    cudnnConvolutionFwdAlgo_t conv2_algo;
+    cudnnConvolutionFwdAlgo_t fc1_algo;
+    cudnnConvolutionFwdAlgo_t fc2_algo;
 
     // Device memory pointers
     float *d_input;
@@ -112,210 +112,109 @@ private:
     size_t workspace_size;
     void *d_workspace;
 
-    // Output dimensions
-    int batch_size = 1;
+    // Dimensions
+    int batch_size;
     struct LayerDims {
         int n, c, h, w;
     };
-    LayerDims conv1_dims, pool1_dims, conv2_dims, pool2_dims, fc1_dims, fc2_dims;
+    LayerDims input_dims, conv1_dims, pool1_dims, conv2_dims, pool2_dims, 
+              fc1_dims, fc2_dims;
+
+    // Find best convolution algorithm that uses Tensor Cores
+    cudnnConvolutionFwdAlgo_t findBestConvAlgorithm(
+        cudnnTensorDescriptor_t input_desc,
+        cudnnFilterDescriptor_t filter_desc,
+        cudnnConvolutionDescriptor_t conv_desc,
+        cudnnTensorDescriptor_t output_desc,
+        size_t* workspace_size);
 };
 
-CUDACNNInference::CUDACNNInference() {
-    std::cout << "Initializing CuDNN..." << std::endl;
+TensorCNNInference::TensorCNNInference() : batch_size(1) {
+    std::cout << "Initializing TensorCore CNN..." << std::endl;
+    
+    // Create cuDNN handle
     CUDNN_CHECK(cudnnCreate(&cudnn));
-
-    // Create all descriptors
+    
+    // Create descriptors
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&input_desc));
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&conv1_output_desc));
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&pool1_output_desc));
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&conv2_output_desc));
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&pool2_output_desc));
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&pool2_flat_desc));
-    CUDNN_CHECK(cudnnCreateTensorDescriptor(&fc1_input_desc));
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&fc1_output_desc));
-    CUDNN_CHECK(cudnnCreateTensorDescriptor(&fc2_input_desc));
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&fc2_output_desc));
-    CUDNN_CHECK(cudnnCreateFilterDescriptor(&fc1_weight_desc));
-    CUDNN_CHECK(cudnnCreateFilterDescriptor(&fc2_weight_desc));
 
-    // Create bias descriptors
+    CUDNN_CHECK(cudnnCreateFilterDescriptor(&conv1_filter_desc));
+    CUDNN_CHECK(cudnnCreateFilterDescriptor(&conv2_filter_desc));
+    CUDNN_CHECK(cudnnCreateFilterDescriptor(&fc1_filter_desc));
+    CUDNN_CHECK(cudnnCreateFilterDescriptor(&fc2_filter_desc));
+
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&conv1_bias_desc));
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&conv2_bias_desc));
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&fc1_bias_desc));
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&fc2_bias_desc));
-    
-    // Create filter and convolution descriptors
-    CUDNN_CHECK(cudnnCreateFilterDescriptor(&conv1_filter_desc));
-    CUDNN_CHECK(cudnnCreateFilterDescriptor(&conv2_filter_desc));
+
     CUDNN_CHECK(cudnnCreateConvolutionDescriptor(&conv1_desc));
     CUDNN_CHECK(cudnnCreateConvolutionDescriptor(&conv2_desc));
     CUDNN_CHECK(cudnnCreateConvolutionDescriptor(&fc1_desc));
     CUDNN_CHECK(cudnnCreateConvolutionDescriptor(&fc2_desc));
-    
+
     CUDNN_CHECK(cudnnCreateActivationDescriptor(&relu_activation));
     CUDNN_CHECK(cudnnCreatePoolingDescriptor(&pooling_desc));
 
     loadWeights();
     initializeLayers();
+    checkTensorCoreUsage();
 }
 
-CUDACNNInference::~CUDACNNInference() {
-    // Free device memory for layer outputs
-    cudaFree(d_input);
-    cudaFree(d_conv1_output);
-    cudaFree(d_pool1_output);
-    cudaFree(d_conv2_output);
-    cudaFree(d_pool2_output);
-    cudaFree(d_fc1_output);
-    cudaFree(d_fc2_output);
+cudnnConvolutionFwdAlgo_t TensorCNNInference::findBestConvAlgorithm(
+    cudnnTensorDescriptor_t input_desc,
+    cudnnFilterDescriptor_t filter_desc,
+    cudnnConvolutionDescriptor_t conv_desc,
+    cudnnTensorDescriptor_t output_desc,
+    size_t* workspace_size) {
+    
+    const int requestedAlgoCount = 8;
+    int returnedAlgoCount;
+    std::vector<cudnnConvolutionFwdAlgoPerf_t> perfResults(requestedAlgoCount);
+    
+    CUDNN_CHECK(cudnnGetConvolutionForwardAlgorithm_v7(cudnn,
+        input_desc,
+        filter_desc,
+        conv_desc,
+        output_desc,
+        requestedAlgoCount,
+        &returnedAlgoCount,
+        perfResults.data()));
 
-    // Free device memory for weights and biases
-    cudaFree(d_conv1_weight);
-    cudaFree(d_conv1_bias);
-    cudaFree(d_conv2_weight);
-    cudaFree(d_conv2_bias);
-    cudaFree(d_fc1_weight);
-    cudaFree(d_fc1_bias);
-    cudaFree(d_fc2_weight);
-    cudaFree(d_fc2_bias);
-
-    // Free workspace memory
-    if (d_workspace) {
-        cudaFree(d_workspace);
+    // Find the fastest algorithm that uses Tensor Cores
+    cudnnConvolutionFwdAlgo_t bestAlgo = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM;
+    float bestTime = std::numeric_limits<float>::max();
+    
+    for (int i = 0; i < returnedAlgoCount; i++) {
+        if (perfResults[i].status == CUDNN_STATUS_SUCCESS &&
+            perfResults[i].mathType == CUDNN_TENSOR_OP_MATH &&
+            perfResults[i].time < bestTime) {
+            bestTime = perfResults[i].time;
+            bestAlgo = perfResults[i].algo;
+            *workspace_size = std::max(*workspace_size, perfResults[i].memory);
+        }
     }
 
-    // Destroy tensor descriptors
-    cudnnDestroyTensorDescriptor(input_desc);
-    cudnnDestroyTensorDescriptor(conv1_output_desc);
-    cudnnDestroyTensorDescriptor(pool1_output_desc);
-    cudnnDestroyTensorDescriptor(conv2_output_desc);
-    cudnnDestroyTensorDescriptor(pool2_output_desc);
-    cudnnDestroyTensorDescriptor(pool2_flat_desc);
-    cudnnDestroyTensorDescriptor(fc1_input_desc);
-    cudnnDestroyTensorDescriptor(fc1_output_desc);
-    cudnnDestroyTensorDescriptor(fc2_input_desc);
-    cudnnDestroyTensorDescriptor(fc2_output_desc);
-    cudnnDestroyFilterDescriptor(fc1_weight_desc);
-    cudnnDestroyFilterDescriptor(fc2_weight_desc);
-
-    // Destroy bias descriptors
-    cudnnDestroyTensorDescriptor(conv1_bias_desc);
-    cudnnDestroyTensorDescriptor(conv2_bias_desc);
-    cudnnDestroyTensorDescriptor(fc1_bias_desc);
-    cudnnDestroyTensorDescriptor(fc2_bias_desc);
-
-    // Destroy filter and convolution descriptors
-    cudnnDestroyFilterDescriptor(conv1_filter_desc);
-    cudnnDestroyFilterDescriptor(conv2_filter_desc);
-    cudnnDestroyConvolutionDescriptor(conv1_desc);
-    cudnnDestroyConvolutionDescriptor(conv2_desc);
-    cudnnDestroyConvolutionDescriptor(fc1_desc);
-    cudnnDestroyConvolutionDescriptor(fc2_desc);
-
-    // Destroy activation and pooling descriptors
-    cudnnDestroyActivationDescriptor(relu_activation);
-    cudnnDestroyPoolingDescriptor(pooling_desc);
-
-    // Destroy cuDNN handle
-    cudnnDestroy(cudnn);
-}
-
-void CUDACNNInference::loadWeights() {
-    std::cout << "Loading model weights..." << std::endl;
-    
-    // Conv1 weights
-    auto conv1_weights = loadBinaryFile<float>("../../data/weights/conv1.weight_fp32.bin");
-    auto conv1_biases = loadBinaryFile<float>("../../data/weights/conv1.bias_fp32.bin");
-    
-    //  print first few weights for verification (debugging)
-    // std::cout << "Conv1 weights first values: ";
-    // for(int i = 0; i < 5; i++) {
-    //     std::cout << conv1_weights[i] << " ";
-    // }
-    // std::cout << std::endl;
-    
-    const size_t conv1_weights_size = 32 * 3 * 3 * 3;
-    const size_t conv1_bias_size = 32;
-    
-    if (conv1_weights.size() != conv1_weights_size || conv1_biases.size() != conv1_bias_size) {
-        std::cerr << "Error: Conv1 weight/bias size mismatch!" << std::endl;
-        std::exit(EXIT_FAILURE);
-    }
-
-    // Conv2 weights
-    auto conv2_weights = loadBinaryFile<float>("../../data/weights/conv2.weight_fp32.bin");
-    auto conv2_biases = loadBinaryFile<float>("../../data/weights/conv2.bias_fp32.bin");
-    
-    const size_t conv2_weights_size = 64 * 32 * 3 * 3;
-    const size_t conv2_bias_size = 64;
-    
-    // FC1 weights
-    auto fc1_weights = loadBinaryFile<float>("../../data/weights/fc1.weight_fp32.bin");
-    auto fc1_biases = loadBinaryFile<float>("../../data/weights/fc1.bias_fp32.bin");
-    
-    const size_t fc1_weights_size = 128 * (64 * 8 * 8);
-    const size_t fc1_bias_size = 128;  // Added definition
-    
-    // FC2 weights
-    auto fc2_weights = loadBinaryFile<float>("../../data/weights/fc2.weight_fp32.bin");
-    auto fc2_biases = loadBinaryFile<float>("../../data/weights/fc2.bias_fp32.bin");
-    
-    const size_t fc2_weights_size = 10 * 128;
-    const size_t fc2_bias_size = 10;  // Added definition
-
-    // Size verification
-    if (conv2_weights.size() != conv2_weights_size || conv2_biases.size() != conv2_bias_size) {
-        std::cerr << "Error: Conv2 weight/bias size mismatch!" << std::endl;
-        std::exit(EXIT_FAILURE);
-    }
-
-    if (fc1_weights.size() != fc1_weights_size || fc1_biases.size() != fc1_bias_size) {
-        std::cerr << "Error: FC1 weight/bias size mismatch!" << std::endl;
-        std::exit(EXIT_FAILURE);
-    }
-
-    if (fc2_weights.size() != fc2_weights_size || fc2_biases.size() != fc2_bias_size) {
-        std::cerr << "Error: FC2 weight/bias size mismatch!" << std::endl;
-        std::exit(EXIT_FAILURE);
-    }
-
-    // Allocate and copy all weights in order
-    cudaMalloc(&d_conv1_weight, conv1_weights_size * sizeof(float));
-    cudaMalloc(&d_conv1_bias, conv1_bias_size * sizeof(float));
-    cudaMemcpy(d_conv1_weight, conv1_weights.data(), conv1_weights_size * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_conv1_bias, conv1_biases.data(), conv1_bias_size * sizeof(float), cudaMemcpyHostToDevice);
-
-    cudaMalloc(&d_conv2_weight, conv2_weights_size * sizeof(float));
-    cudaMalloc(&d_conv2_bias, conv2_bias_size * sizeof(float));
-    cudaMemcpy(d_conv2_weight, conv2_weights.data(), conv2_weights_size * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_conv2_bias, conv2_biases.data(), conv2_bias_size * sizeof(float), cudaMemcpyHostToDevice);
-
-    cudaMalloc(&d_fc1_weight, fc1_weights_size * sizeof(float));
-    cudaMalloc(&d_fc1_bias, fc1_bias_size * sizeof(float));
-    cudaMemcpy(d_fc1_weight, fc1_weights.data(), fc1_weights_size * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_fc1_bias, fc1_biases.data(), fc1_bias_size * sizeof(float), cudaMemcpyHostToDevice);
-
-    cudaMalloc(&d_fc2_weight, fc2_weights_size * sizeof(float));
-    cudaMalloc(&d_fc2_bias, fc2_bias_size * sizeof(float));
-    cudaMemcpy(d_fc2_weight, fc2_weights.data(), fc2_weights_size * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_fc2_bias, fc2_biases.data(), fc2_bias_size * sizeof(float), cudaMemcpyHostToDevice);
-
-    cudaError_t error = cudaGetLastError();
-    if (error != cudaSuccess) {
-        std::cerr << "CUDA error while loading weights: " << cudaGetErrorString(error) << std::endl;
-        std::exit(EXIT_FAILURE);
-    }
-    
-    std::cout << "Successfully loaded all weights to GPU." << std::endl;
+    return bestAlgo;
 }
 
 
-void CUDACNNInference::initializeLayers() {
-    // Input: 3x32x32
+
+void TensorCNNInference::initializeLayers() {
+    // Input layer: 3x32x32
+    input_dims = {batch_size, 3, 32, 32};
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(input_desc, CUDNN_TENSOR_NCHW, 
-        CUDNN_DATA_FLOAT, batch_size, 3, 32, 32));
+        CUDNN_DATA_FLOAT, input_dims.n, input_dims.c, input_dims.h, input_dims.w));
 
-    // Conv1: 3 -> 32 channels, 3x3 kernel
+    // Conv1 layer setup
+    conv1_dims = {batch_size, 32, 32, 32};  // Output size after padding
     CUDNN_CHECK(cudnnSetFilter4dDescriptor(conv1_filter_desc, CUDNN_DATA_FLOAT, 
         CUDNN_TENSOR_NCHW, 32, 3, 3, 3));
     
@@ -325,13 +224,9 @@ void CUDACNNInference::initializeLayers() {
         1, 1,    // dilation
         CUDNN_CROSS_CORRELATION, 
         CUDNN_DATA_FLOAT));
-
-    // Get Conv1 output dimensions
-    CUDNN_CHECK(cudnnGetConvolution2dForwardOutputDim(conv1_desc, input_desc, 
-        conv1_filter_desc, &conv1_dims.n, &conv1_dims.c, &conv1_dims.h, &conv1_dims.w));
     
-    std::cout << "Conv1 output dimensions: " << conv1_dims.n << "x" << conv1_dims.c 
-              << "x" << conv1_dims.h << "x" << conv1_dims.w << std::endl;
+    // Enable Tensor Core operation for conv1
+    CUDNN_CHECK(cudnnSetConvolutionMathType(conv1_desc, CUDNN_TENSOR_OP_MATH));
     
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(conv1_output_desc, CUDNN_TENSOR_NCHW,
         CUDNN_DATA_FLOAT, conv1_dims.n, conv1_dims.c, conv1_dims.h, conv1_dims.w));
@@ -339,20 +234,6 @@ void CUDACNNInference::initializeLayers() {
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(conv1_bias_desc, CUDNN_TENSOR_NCHW,
         CUDNN_DATA_FLOAT, 1, conv1_dims.c, 1, 1));
 
-    // Find best algorithm for Conv1
-    int requestedAlgoCount = 1;
-    int returnedAlgoCount;
-    cudnnConvolutionFwdAlgoPerf_t perfResults;
-    
-    CUDNN_CHECK(cudnnGetConvolutionForwardAlgorithm_v7(cudnn,
-        input_desc,
-        conv1_filter_desc,
-        conv1_desc,
-        conv1_output_desc,
-        requestedAlgoCount,
-        &returnedAlgoCount,
-        &perfResults));
-    
     // Pooling setup
     CUDNN_CHECK(cudnnSetPooling2dDescriptor(pooling_desc, 
         CUDNN_POOLING_MAX,
@@ -362,17 +243,12 @@ void CUDACNNInference::initializeLayers() {
         2, 2));  // stride height, width
 
     // Get Pool1 dimensions
-    CUDNN_CHECK(cudnnGetPooling2dForwardOutputDim(pooling_desc,
-        conv1_output_desc,
-        &pool1_dims.n, &pool1_dims.c, &pool1_dims.h, &pool1_dims.w));
-    
-    std::cout << "Pool1 dimensions: " << pool1_dims.n << "x" << pool1_dims.c 
-              << "x" << pool1_dims.h << "x" << pool1_dims.w << std::endl;
-    
+    pool1_dims = {conv1_dims.n, conv1_dims.c, conv1_dims.h/2, conv1_dims.w/2};
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(pool1_output_desc, CUDNN_TENSOR_NCHW,
         CUDNN_DATA_FLOAT, pool1_dims.n, pool1_dims.c, pool1_dims.h, pool1_dims.w));
 
     // Conv2 setup
+    conv2_dims = {pool1_dims.n, 64, pool1_dims.h, pool1_dims.w};
     CUDNN_CHECK(cudnnSetFilter4dDescriptor(conv2_filter_desc, CUDNN_DATA_FLOAT, 
         CUDNN_TENSOR_NCHW, 64, 32, 3, 3));
     
@@ -383,12 +259,8 @@ void CUDACNNInference::initializeLayers() {
         CUDNN_CROSS_CORRELATION, 
         CUDNN_DATA_FLOAT));
     
-    // Get Conv2 output dimensions
-    CUDNN_CHECK(cudnnGetConvolution2dForwardOutputDim(conv2_desc, pool1_output_desc, 
-        conv2_filter_desc, &conv2_dims.n, &conv2_dims.c, &conv2_dims.h, &conv2_dims.w));
-    
-    std::cout << "Conv2 output dimensions: " << conv2_dims.n << "x" << conv2_dims.c 
-              << "x" << conv2_dims.h << "x" << conv2_dims.w << std::endl;
+    // Enable Tensor Core operation for conv2
+    CUDNN_CHECK(cudnnSetConvolutionMathType(conv2_desc, CUDNN_TENSOR_OP_MATH));
     
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(conv2_output_desc, CUDNN_TENSOR_NCHW,
         CUDNN_DATA_FLOAT, conv2_dims.n, conv2_dims.c, conv2_dims.h, conv2_dims.w));
@@ -396,38 +268,20 @@ void CUDACNNInference::initializeLayers() {
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(conv2_bias_desc, CUDNN_TENSOR_NCHW,
         CUDNN_DATA_FLOAT, 1, conv2_dims.c, 1, 1));
 
-    // Find best algorithm for Conv2
-    CUDNN_CHECK(cudnnGetConvolutionForwardAlgorithm_v7(cudnn,
-        pool1_output_desc,
-        conv2_filter_desc,
-        conv2_desc,
-        conv2_output_desc,
-        requestedAlgoCount,
-        &returnedAlgoCount,
-        &perfResults));
-
     // Pool2 setup
     pool2_dims = {conv2_dims.n, conv2_dims.c, conv2_dims.h/2, conv2_dims.w/2};
-    
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(pool2_output_desc, CUDNN_TENSOR_NCHW,
         CUDNN_DATA_FLOAT, pool2_dims.n, pool2_dims.c, pool2_dims.h, pool2_dims.w));
 
-    std::cout << "Pool2 dimensions: " << pool2_dims.n << "x" << pool2_dims.c 
-              << "x" << pool2_dims.h << "x" << pool2_dims.w << std::endl;
-
-    // Calculate flattened size for FC1 input
-    fc1_input_size = pool2_dims.c * pool2_dims.h * pool2_dims.w;
-
-    // Set up the flattened pool2 descriptor
+    // Setup flattened pool2 for FC layers
+    int fc_input_size = pool2_dims.c * pool2_dims.h * pool2_dims.w;
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(pool2_flat_desc, CUDNN_TENSOR_NCHW,
-        CUDNN_DATA_FLOAT, batch_size, fc1_input_size, 1, 1));
-
-    std::cout << "Pool2 flattened dimensions: " << batch_size << "x" 
-              << fc1_input_size << "x1x1" << std::endl;
+        CUDNN_DATA_FLOAT, batch_size, fc_input_size, 1, 1));
 
     // FC1 setup
-    CUDNN_CHECK(cudnnSetFilter4dDescriptor(fc1_weight_desc, CUDNN_DATA_FLOAT,
-        CUDNN_TENSOR_NCHW, 128, fc1_input_size, 1, 1));
+    fc1_dims = {batch_size, 128, 1, 1};
+    CUDNN_CHECK(cudnnSetFilter4dDescriptor(fc1_filter_desc, CUDNN_DATA_FLOAT,
+        CUDNN_TENSOR_NCHW, 128, fc_input_size, 1, 1));
     
     CUDNN_CHECK(cudnnSetConvolution2dDescriptor(fc1_desc,
         0, 0,    // padding
@@ -435,25 +289,19 @@ void CUDACNNInference::initializeLayers() {
         1, 1,    // dilation
         CUDNN_CROSS_CORRELATION,
         CUDNN_DATA_FLOAT));
-
+    
+    // Enable Tensor Core operation for FC1
+    CUDNN_CHECK(cudnnSetConvolutionMathType(fc1_desc, CUDNN_TENSOR_OP_MATH));
+    
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(fc1_output_desc, CUDNN_TENSOR_NCHW,
-        CUDNN_DATA_FLOAT, batch_size, 128, 1, 1));
+        CUDNN_DATA_FLOAT, fc1_dims.n, fc1_dims.c, fc1_dims.h, fc1_dims.w));
     
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(fc1_bias_desc, CUDNN_TENSOR_NCHW,
-        CUDNN_DATA_FLOAT, 1, 128, 1, 1));
-
-    // Find best algorithm for FC1
-    CUDNN_CHECK(cudnnGetConvolutionForwardAlgorithm_v7(cudnn,
-        pool2_flat_desc,
-        fc1_weight_desc,
-        fc1_desc,
-        fc1_output_desc,
-        requestedAlgoCount,
-        &returnedAlgoCount,
-        &perfResults));
+        CUDNN_DATA_FLOAT, 1, fc1_dims.c, 1, 1));
 
     // FC2 setup
-    CUDNN_CHECK(cudnnSetFilter4dDescriptor(fc2_weight_desc, CUDNN_DATA_FLOAT,
+    fc2_dims = {batch_size, 10, 1, 1};
+    CUDNN_CHECK(cudnnSetFilter4dDescriptor(fc2_filter_desc, CUDNN_DATA_FLOAT,
         CUDNN_TENSOR_NCHW, 10, 128, 1, 1));
     
     CUDNN_CHECK(cudnnSetConvolution2dDescriptor(fc2_desc,
@@ -462,22 +310,15 @@ void CUDACNNInference::initializeLayers() {
         1, 1,    // dilation
         CUDNN_CROSS_CORRELATION,
         CUDNN_DATA_FLOAT));
-
+    
+    // Enable Tensor Core operation for FC2
+    CUDNN_CHECK(cudnnSetConvolutionMathType(fc2_desc, CUDNN_TENSOR_OP_MATH));
+    
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(fc2_output_desc, CUDNN_TENSOR_NCHW,
-        CUDNN_DATA_FLOAT, batch_size, 10, 1, 1));
+        CUDNN_DATA_FLOAT, fc2_dims.n, fc2_dims.c, fc2_dims.h, fc2_dims.w));
     
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(fc2_bias_desc, CUDNN_TENSOR_NCHW,
-        CUDNN_DATA_FLOAT, 1, 10, 1, 1));
-
-    // Find best algorithm for FC2
-    CUDNN_CHECK(cudnnGetConvolutionForwardAlgorithm_v7(cudnn,
-        fc1_output_desc,
-        fc2_weight_desc,
-        fc2_desc,
-        fc2_output_desc,
-        requestedAlgoCount,
-        &returnedAlgoCount,
-        &perfResults));
+        CUDNN_DATA_FLOAT, 1, fc2_dims.c, 1, 1));
 
     // ReLU activation setup
     CUDNN_CHECK(cudnnSetActivationDescriptor(relu_activation,
@@ -485,88 +326,97 @@ void CUDACNNInference::initializeLayers() {
         CUDNN_NOT_PROPAGATE_NAN,
         0.0));
 
-    // Calculate workspace sizes for all operations
-    size_t workspace_sizes[4];
-    CUDNN_CHECK(cudnnGetConvolutionForwardWorkspaceSize(cudnn,
-        input_desc, conv1_filter_desc, conv1_desc, conv1_output_desc,
-        CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM, &workspace_sizes[0]));
-    
-    CUDNN_CHECK(cudnnGetConvolutionForwardWorkspaceSize(cudnn,
-        pool1_output_desc, conv2_filter_desc, conv2_desc, conv2_output_desc,
-        CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM, &workspace_sizes[1]));
-    
-    CUDNN_CHECK(cudnnGetConvolutionForwardWorkspaceSize(cudnn,
-        pool2_flat_desc, fc1_weight_desc, fc1_desc, fc1_output_desc,
-        CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM, &workspace_sizes[2]));
-    
-    CUDNN_CHECK(cudnnGetConvolutionForwardWorkspaceSize(cudnn,
-        fc1_output_desc, fc2_weight_desc, fc2_desc, fc2_output_desc,
-        CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM, &workspace_sizes[3]));
+    // Find best algorithms and workspace size for all convolutions
+    workspace_size = 0;
+    conv1_algo = findBestConvAlgorithm(input_desc, conv1_filter_desc, conv1_desc, 
+                                      conv1_output_desc, &workspace_size);
+    conv2_algo = findBestConvAlgorithm(pool1_output_desc, conv2_filter_desc, conv2_desc, 
+                                      conv2_output_desc, &workspace_size);
+    fc1_algo = findBestConvAlgorithm(pool2_flat_desc, fc1_filter_desc, fc1_desc, 
+                                    fc1_output_desc, &workspace_size);
+    fc2_algo = findBestConvAlgorithm(fc1_output_desc, fc2_filter_desc, fc2_desc, 
+                                    fc2_output_desc, &workspace_size);
 
-    // Find maximum workspace size needed
-    workspace_size = *std::max_element(workspace_sizes, workspace_sizes + 4);
-    cudaMalloc(&d_workspace, workspace_size);
+    // Allocate workspace memory
+    CUDA_CHECK(cudaMalloc(&d_workspace, workspace_size));
 
     // Allocate memory for layer outputs
-    size_t input_bytes = batch_size * 3 * 32 * 32 * sizeof(float);
-    size_t conv1_output_bytes = batch_size * conv1_dims.c * conv1_dims.h * conv1_dims.w * sizeof(float);
-    size_t pool1_output_bytes = batch_size * pool1_dims.c * pool1_dims.h * pool1_dims.w * sizeof(float);
-    size_t conv2_output_bytes = batch_size * conv2_dims.c * conv2_dims.h * conv2_dims.w * sizeof(float);
-    size_t pool2_output_bytes = batch_size * pool2_dims.c * pool2_dims.h * pool2_dims.w * sizeof(float);
-    size_t fc1_output_bytes = batch_size * 128 * sizeof(float);
-    size_t fc2_output_bytes = batch_size * 10 * sizeof(float);
-
-    cudaMalloc(&d_input, input_bytes);
-    cudaMalloc(&d_conv1_output, conv1_output_bytes);
-    cudaMalloc(&d_pool1_output, pool1_output_bytes);
-    cudaMalloc(&d_conv2_output, conv2_output_bytes);
-    cudaMalloc(&d_pool2_output, pool2_output_bytes);
-    cudaMalloc(&d_fc1_output, fc1_output_bytes);
-    cudaMalloc(&d_fc2_output, fc2_output_bytes);
-
-    cudaError_t error = cudaGetLastError();
-    if (error != cudaSuccess) {
-        std::cerr << "CUDA error after memory allocation: " << cudaGetErrorString(error) << std::endl;
-        throw std::runtime_error("CUDA memory allocation failed");
-    }
+    CUDA_CHECK(cudaMalloc(&d_input, batch_size * 3 * 32 * 32 * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_conv1_output, batch_size * conv1_dims.c * conv1_dims.h * conv1_dims.w * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_pool1_output, batch_size * pool1_dims.c * pool1_dims.h * pool1_dims.w * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_conv2_output, batch_size * conv2_dims.c * conv2_dims.h * conv2_dims.w * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_pool2_output, batch_size * pool2_dims.c * pool2_dims.h * pool2_dims.w * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_fc1_output, batch_size * fc1_dims.c * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_fc2_output, batch_size * fc2_dims.c * sizeof(float)));
 
     std::cout << "Layer initialization complete." << std::endl;
-    std::cout << "Workspace size: " << workspace_size << " bytes" << std::endl;
+    std::cout << "Workspace size: " << workspace_size / (1024.0 * 1024.0) << " MB" << std::endl;
 }
 
-void checkTensorDimensions(cudnnTensorDescriptor_t desc, const char* name) {
-    int n, c, h, w, nStride, cStride, hStride, wStride;
-    cudnnDataType_t dtype;
-    CUDNN_CHECK(cudnnGetTensor4dDescriptor(desc, &dtype, &n, &c, &h, &w,
-                              &nStride, &cStride, &hStride, &wStride));
-    std::cout << name << " tensor dimensions: " << n << "x" << c << "x" << h << "x" << w << std::endl;
+
+void TensorCNNInference::checkTensorCoreUsage() {
+    cudaDeviceProp prop;
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
+    
+    std::cout << "\nGPU Configuration:" << std::endl;
+    std::cout << "GPU: " << prop.name << std::endl;
+    std::cout << "Compute Capability: " << prop.major << "." << prop.minor << std::endl;
+    
+    // Tensor Cores are available on:
+    // - Volta (7.0) and above for FP16
+    // - Ampere (8.0) and above for TF32
+    bool hasTensorCores = false;
+    bool supportsTF32 = false;
+    
+    if (prop.major >= 7) {
+        hasTensorCores = true;
+        if (prop.major >= 8) {
+            supportsTF32 = true;
+        }
+    }
+    
+    std::cout << "Tensor Cores Available: " << (hasTensorCores ? "Yes" : "No") << std::endl;
+    if (hasTensorCores) {
+        std::cout << "TF32 Support: " << (supportsTF32 ? "Yes" : "No") << std::endl;
+    }
+    
+    // Check math type configuration for each convolution
+    cudnnMathType_t mathType;
+    CUDNN_CHECK(cudnnGetConvolutionMathType(conv1_desc, &mathType));
+    std::cout << "\nConvolution Layer Math Types:" << std::endl;
+    std::cout << "Conv1: " << 
+        (mathType == CUDNN_TENSOR_OP_MATH ? "Tensor Core" : "Standard") << std::endl;
+    
+    CUDNN_CHECK(cudnnGetConvolutionMathType(conv2_desc, &mathType));
+    std::cout << "Conv2: " << 
+        (mathType == CUDNN_TENSOR_OP_MATH ? "Tensor Core" : "Standard") << std::endl;
+    
+    CUDNN_CHECK(cudnnGetConvolutionMathType(fc1_desc, &mathType));
+    std::cout << "FC1: " << 
+        (mathType == CUDNN_TENSOR_OP_MATH ? "Tensor Core" : "Standard") << std::endl;
+    
+    CUDNN_CHECK(cudnnGetConvolutionMathType(fc2_desc, &mathType));
+    std::cout << "FC2: " << 
+        (mathType == CUDNN_TENSOR_OP_MATH ? "Tensor Core" : "Standard") << std::endl;
+    
+    std::cout << "\nWorkspace Size: " << workspace_size / (1024.0 * 1024.0) << " MB" << std::endl;
 }
 
-void checkFilterDimensions(cudnnFilterDescriptor_t desc, const char* name) {
-    int k, c, h, w;
-    cudnnDataType_t dtype;
-    cudnnTensorFormat_t format;
-    CUDNN_CHECK(cudnnGetFilter4dDescriptor(desc, &dtype, &format, &k, &c, &h, &w));
-    std::cout << name << " filter dimensions: " << k << "x" << c << "x" << h << "x" << w << std::endl;
-}
-
-void CUDACNNInference::infer(const std::vector<float>& input_data) {
+void TensorCNNInference::infer(const std::vector<float>& input_data) {
     const float alpha = 1.0f;
     const float beta = 0.0f;
-    
-    // Verify input data size and copy to device
-    size_t expected_input_size = batch_size * 3 * 32 * 32;
-    if (input_data.size() != expected_input_size) {
-        throw std::runtime_error("Input data size mismatch");
-    }
 
-    cudaMemcpy(d_input, input_data.data(), input_data.size() * sizeof(float), cudaMemcpyHostToDevice);
+    // Copy input to device
+    CUDA_CHECK(cudaMemcpy(d_input, input_data.data(), 
+                         input_data.size() * sizeof(float), 
+                         cudaMemcpyHostToDevice));
 
-    // Conv1 layer
+    // Conv1 + ReLU
+// Conv1 + ReLU
     CUDNN_CHECK(cudnnConvolutionForward(cudnn, &alpha, 
         input_desc, d_input,
         conv1_filter_desc, d_conv1_weight,
-        conv1_desc, CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM,
+        conv1_desc, conv1_algo,
         d_workspace, workspace_size,
         &beta, conv1_output_desc, d_conv1_output));
     
@@ -574,10 +424,10 @@ void CUDACNNInference::infer(const std::vector<float>& input_data) {
     CUDNN_CHECK(cudnnAddTensor(cudnn, 
         &alpha,
         conv1_bias_desc, d_conv1_bias,
-        &alpha,  // Important: using alpha here, not beta
+        &alpha,
         conv1_output_desc, d_conv1_output));
     
-    // ReLU
+    // ReLU activation
     CUDNN_CHECK(cudnnActivationForward(cudnn, relu_activation,
         &alpha, conv1_output_desc, d_conv1_output,
         &beta, conv1_output_desc, d_conv1_output));
@@ -587,11 +437,11 @@ void CUDACNNInference::infer(const std::vector<float>& input_data) {
         &alpha, conv1_output_desc, d_conv1_output,
         &beta, pool1_output_desc, d_pool1_output));
 
-    // Conv2 layer
+    // Conv2 + ReLU
     CUDNN_CHECK(cudnnConvolutionForward(cudnn, &alpha,
         pool1_output_desc, d_pool1_output,
         conv2_filter_desc, d_conv2_weight,
-        conv2_desc, CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM,
+        conv2_desc, conv2_algo,
         d_workspace, workspace_size,
         &beta, conv2_output_desc, d_conv2_output));
     
@@ -599,10 +449,10 @@ void CUDACNNInference::infer(const std::vector<float>& input_data) {
     CUDNN_CHECK(cudnnAddTensor(cudnn, 
         &alpha,
         conv2_bias_desc, d_conv2_bias,
-        &alpha,  // Important: using alpha here, not beta
+        &alpha,
         conv2_output_desc, d_conv2_output));
     
-    // ReLU
+    // ReLU activation
     CUDNN_CHECK(cudnnActivationForward(cudnn, relu_activation,
         &alpha, conv2_output_desc, d_conv2_output,
         &beta, conv2_output_desc, d_conv2_output));
@@ -612,11 +462,11 @@ void CUDACNNInference::infer(const std::vector<float>& input_data) {
         &alpha, conv2_output_desc, d_conv2_output,
         &beta, pool2_output_desc, d_pool2_output));
 
-    // FC1 layer
+    // FC1 + ReLU
     CUDNN_CHECK(cudnnConvolutionForward(cudnn, &alpha,
         pool2_flat_desc, d_pool2_output,
-        fc1_weight_desc, d_fc1_weight,
-        fc1_desc, CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM,
+        fc1_filter_desc, d_fc1_weight,
+        fc1_desc, fc1_algo,
         d_workspace, workspace_size,
         &beta, fc1_output_desc, d_fc1_output));
     
@@ -624,19 +474,19 @@ void CUDACNNInference::infer(const std::vector<float>& input_data) {
     CUDNN_CHECK(cudnnAddTensor(cudnn, 
         &alpha,
         fc1_bias_desc, d_fc1_bias,
-        &alpha,  // Important: using alpha here, not beta
+        &alpha,
         fc1_output_desc, d_fc1_output));
     
-    // ReLU
+    // ReLU activation
     CUDNN_CHECK(cudnnActivationForward(cudnn, relu_activation,
         &alpha, fc1_output_desc, d_fc1_output,
         &beta, fc1_output_desc, d_fc1_output));
 
-    // FC2 layer (final layer)
+    // FC2 (final layer)
     CUDNN_CHECK(cudnnConvolutionForward(cudnn, &alpha,
         fc1_output_desc, d_fc1_output,
-        fc2_weight_desc, d_fc2_weight,
-        fc2_desc, CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM,
+        fc2_filter_desc, d_fc2_weight,
+        fc2_desc, fc2_algo,
         d_workspace, workspace_size,
         &beta, fc2_output_desc, d_fc2_output));
     
@@ -644,42 +494,30 @@ void CUDACNNInference::infer(const std::vector<float>& input_data) {
     CUDNN_CHECK(cudnnAddTensor(cudnn, 
         &alpha,
         fc2_bias_desc, d_fc2_bias,
-        &alpha,  // Important: using alpha here, not beta
+        &alpha,
         fc2_output_desc, d_fc2_output));
 
     // Check for any CUDA errors
-    cudaError_t cuda_status = cudaGetLastError();
-    if (cuda_status != cudaSuccess) {
-        throw std::runtime_error(std::string("CUDA error during inference: ") + 
-                               cudaGetErrorString(cuda_status));
-    }
+    CUDA_CHECK(cudaGetLastError());
 }
 
-
-std::vector<float> CUDACNNInference::getOutput() {
+std::vector<float> TensorCNNInference::getOutput() {
     std::vector<float> output(10);
     
     // Copy the output from device to host
-    cudaError_t status = cudaMemcpy(output.data(), d_fc2_output, 
-                                   output.size() * sizeof(float), 
-                                   cudaMemcpyDeviceToHost);
-    
-    if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("Failed to copy output from device: ") + 
-                               cudaGetErrorString(status));
-    }
+    CUDA_CHECK(cudaMemcpy(output.data(), d_fc2_output, 
+                         output.size() * sizeof(float), 
+                         cudaMemcpyDeviceToHost));
     
     // Apply softmax normalization
     float max_val = *std::max_element(output.begin(), output.end());
     float sum = 0.0f;
     
-    // Subtract max for numerical stability and compute exp
     for (float& val : output) {
         val = std::exp(val - max_val);
         sum += val;
     }
     
-    // Normalize
     for (float& val : output) {
         val /= sum;
     }
@@ -687,6 +525,137 @@ std::vector<float> CUDACNNInference::getOutput() {
     return output;
 }
 
+
+TensorCNNInference::~TensorCNNInference() {
+    // Free device memory
+    cudaFree(d_input);
+    cudaFree(d_conv1_weight);
+    cudaFree(d_conv1_bias);
+    cudaFree(d_conv1_output);
+    cudaFree(d_pool1_output);
+    cudaFree(d_conv2_weight);
+    cudaFree(d_conv2_bias);
+    cudaFree(d_conv2_output);
+    cudaFree(d_pool2_output);
+    cudaFree(d_fc1_weight);
+    cudaFree(d_fc1_bias);
+    cudaFree(d_fc1_output);
+    cudaFree(d_fc2_weight);
+    cudaFree(d_fc2_bias);
+    cudaFree(d_fc2_output);
+    cudaFree(d_workspace);
+
+    // Destroy descriptors
+    cudnnDestroyTensorDescriptor(input_desc);
+    cudnnDestroyTensorDescriptor(conv1_output_desc);
+    cudnnDestroyTensorDescriptor(pool1_output_desc);
+    cudnnDestroyTensorDescriptor(conv2_output_desc);
+    cudnnDestroyTensorDescriptor(pool2_output_desc);
+    cudnnDestroyTensorDescriptor(pool2_flat_desc);
+    cudnnDestroyTensorDescriptor(fc1_output_desc);
+    cudnnDestroyTensorDescriptor(fc2_output_desc);
+    
+    cudnnDestroyFilterDescriptor(conv1_filter_desc);
+    cudnnDestroyFilterDescriptor(conv2_filter_desc);
+    cudnnDestroyFilterDescriptor(fc1_filter_desc);
+    cudnnDestroyFilterDescriptor(fc2_filter_desc);
+    
+    cudnnDestroyTensorDescriptor(conv1_bias_desc);
+    cudnnDestroyTensorDescriptor(conv2_bias_desc);
+    cudnnDestroyTensorDescriptor(fc1_bias_desc);
+    cudnnDestroyTensorDescriptor(fc2_bias_desc);
+    
+    cudnnDestroyConvolutionDescriptor(conv1_desc);
+    cudnnDestroyConvolutionDescriptor(conv2_desc);
+    cudnnDestroyConvolutionDescriptor(fc1_desc);
+    cudnnDestroyConvolutionDescriptor(fc2_desc);
+    
+    cudnnDestroyActivationDescriptor(relu_activation);
+    cudnnDestroyPoolingDescriptor(pooling_desc);
+    
+    cudnnDestroy(cudnn);
+}
+
+void TensorCNNInference::loadWeights() {
+    std::cout << "Loading model weights..." << std::endl;
+    
+    // Load weights from binary files
+    auto conv1_weights = loadBinaryFile<float>("../../../data/weights/conv1.weight_fp32.bin");
+    auto conv1_biases = loadBinaryFile<float>("../../../data/weights/conv1.bias_fp32.bin");
+    auto conv2_weights = loadBinaryFile<float>("../../../data/weights/conv2.weight_fp32.bin");
+    auto conv2_biases = loadBinaryFile<float>("../../../data/weights/conv2.bias_fp32.bin");
+    auto fc1_weights = loadBinaryFile<float>("../../../data/weights/fc1.weight_fp32.bin");
+    auto fc1_biases = loadBinaryFile<float>("../../../data/weights/fc1.bias_fp32.bin");
+    auto fc2_weights = loadBinaryFile<float>("../../../data/weights/fc2.weight_fp32.bin");
+    auto fc2_biases = loadBinaryFile<float>("../../../data/weights/fc2.bias_fp32.bin");
+    
+    // Verify sizes
+    const size_t conv1_weights_size = 32 * 3 * 3 * 3;
+    const size_t conv1_bias_size = 32;
+    const size_t conv2_weights_size = 64 * 32 * 3 * 3;
+    const size_t conv2_bias_size = 64;
+    const size_t fc1_weights_size = 128 * (64 * 8 * 8);
+    const size_t fc1_bias_size = 128;
+    const size_t fc2_weights_size = 10 * 128;
+    const size_t fc2_bias_size = 10;
+    
+    // Verify sizes match expected dimensions
+    if (conv1_weights.size() != conv1_weights_size ||
+        conv1_biases.size() != conv1_bias_size ||
+        conv2_weights.size() != conv2_weights_size ||
+        conv2_biases.size() != conv2_bias_size ||
+        fc1_weights.size() != fc1_weights_size ||
+        fc1_biases.size() != fc1_bias_size ||
+        fc2_weights.size() != fc2_weights_size ||
+        fc2_biases.size() != fc2_bias_size) {
+        throw std::runtime_error("Weight file sizes do not match expected dimensions");
+    }
+    
+    // Allocate and copy weights to device
+    CUDA_CHECK(cudaMalloc(&d_conv1_weight, conv1_weights_size * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_conv1_bias, conv1_bias_size * sizeof(float)));
+    CUDA_CHECK(cudaMemcpy(d_conv1_weight, conv1_weights.data(), 
+                         conv1_weights_size * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_conv1_bias, conv1_biases.data(), 
+                         conv1_bias_size * sizeof(float), cudaMemcpyHostToDevice));
+    
+    CUDA_CHECK(cudaMalloc(&d_conv2_weight, conv2_weights_size * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_conv2_bias, conv2_bias_size * sizeof(float)));
+    CUDA_CHECK(cudaMemcpy(d_conv2_weight, conv2_weights.data(),
+                         conv2_weights_size * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_conv2_bias, conv2_biases.data(),
+                         conv2_bias_size * sizeof(float), cudaMemcpyHostToDevice));
+
+    CUDA_CHECK(cudaMalloc(&d_fc1_weight, fc1_weights_size * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_fc1_bias, fc1_bias_size * sizeof(float)));
+    CUDA_CHECK(cudaMemcpy(d_fc1_weight, fc1_weights.data(),
+                         fc1_weights_size * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_fc1_bias, fc1_biases.data(),
+                         fc1_bias_size * sizeof(float), cudaMemcpyHostToDevice));
+
+    CUDA_CHECK(cudaMalloc(&d_fc2_weight, fc2_weights_size * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_fc2_bias, fc2_bias_size * sizeof(float)));
+    CUDA_CHECK(cudaMemcpy(d_fc2_weight, fc2_weights.data(),
+                         fc2_weights_size * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_fc2_bias, fc2_biases.data(),
+                         fc2_bias_size * sizeof(float), cudaMemcpyHostToDevice));
+
+    // Verify weights were loaded successfully
+    cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess) {
+        throw std::runtime_error(std::string("CUDA error while loading weights: ") +
+                               cudaGetErrorString(error));
+    }
+
+    std::cout << "Successfully loaded all weights to GPU." << std::endl;
+    
+    // // Print first few weights for verification (debugging)
+    // std::cout << "Conv1 weights first values: ";
+    // for (int i = 0; i < 5; i++) {
+    //     std::cout << std::fixed << std::setprecision(6) << conv1_weights[i] << " ";
+    // }
+    // std::cout << std::endl;
+}
 
 void parseArguments(int argc, char** argv, int& gpu_id, int& repeat_factor) {
     if (argc >= 3) {
@@ -698,6 +667,8 @@ void parseArguments(int argc, char** argv, int& gpu_id, int& repeat_factor) {
         std::exit(EXIT_FAILURE);
     }
 }
+
+
 
 
 int main(int argc, char** argv) {
@@ -716,8 +687,8 @@ int main(int argc, char** argv) {
     // Load validation data, set up the inference model, and evaluate
     try {
         std::cout << "Loading validation data..." << std::endl;
-        auto validation_images = loadBinaryFile<float>("../../data/validation/validation_images.bin");
-        auto validation_labels = loadBinaryFile<int>("../../data/validation/validation_labels.bin");
+        auto validation_images = loadBinaryFile<float>("../../../data/validation/validation_images.bin");
+        auto validation_labels = loadBinaryFile<int>("../../../data/validation/validation_labels.bin");
 
         // Original image size for CIFAR-10 (3 channels, 32x32 resolution)
         size_t image_size = 3 * 32 * 32;
@@ -742,11 +713,14 @@ int main(int argc, char** argv) {
 
         std::cout << "Total images after repeating: " << total_images << std::endl;
 
-        std::cout << "Creating CUDA inference engine..." << std::endl;
-        CUDACNNInference cnn;
+        std::cout << "Creating Tensor Core inference engine..." << std::endl;
+        TensorCNNInference cnn;
+        
+        // Print Tensor Core capabilities and configuration
+        cnn.checkTensorCoreUsage();
 
         std::cout << "\n=== Starting Evaluation ===" << std::endl;
-        std::cout << "Model type: CUDA Core" << std::endl;
+        std::cout << "Model type: Tensor Core" << std::endl;
 
         // Create CUDA events for timing
         cudaEvent_t start, stop;
@@ -786,30 +760,30 @@ int main(int argc, char** argv) {
                 }
 
                 // if (i % 100 == 0) {
+                //     float running_accuracy = (static_cast<float>(correct_count) / (i + 1)) * 100.0f;
 
-                //     // Print running statistics (debugging)
-                //     // float running_accuracy = (static_cast<float>(correct_count) / (i + 1)) * 100.0f;
-                //     // std::cout << "\nProcessed " << i + 1 << "/" << total_images << " images" << std::endl;
-                //     // std::cout << "Running accuracy: " << std::fixed << std::setprecision(2) 
-                //     //           << running_accuracy << "%" << std::endl;
-                //     // std::cout << "Current inference time: " << std::fixed << std::setprecision(3) 
-                //     //           << milliseconds << " ms" << std::endl;
+                    // Print intermediate statistics (debugging)
+                    // std::cout << "\nProcessed " << i + 1 << "/" << total_images << " images" << std::endl;
+                    // std::cout << "Running accuracy: " << std::fixed << std::setprecision(2) 
+                    //           << running_accuracy << "%" << std::endl;
+                    // std::cout << "Current inference time: " << std::fixed << std::setprecision(3) 
+                    //           << milliseconds << " ms" << std::endl;
                     
-                //     // Print top 5 predictions for current image (debugging)
-                //     // std::vector<std::pair<int, float>> scores;
-                //     // for (size_t j = 0; j < output.size(); ++j) {
-                //     //     scores.emplace_back(j, output[j]);
-                //     // }
-                //     // std::sort(scores.begin(), scores.end(),
-                //     //           [](const auto& a, const auto& b) { return a.second > b.second; });
+                    // Print top 5 predictions for current image (debugging)
+                    // std::vector<std::pair<int, float>> scores;
+                    // for (size_t j = 0; j < output.size(); ++j) {
+                    //     scores.emplace_back(j, output[j]);
+                    // }
+                    // std::sort(scores.begin(), scores.end(),
+                    //           [](const auto& a, const auto& b) { return a.second > b.second; });
                     
-                //     // std::cout << "Top 5 predictions for current image:" << std::endl;
-                //     // for (int k = 0; k < std::min(5, static_cast<int>(scores.size())); ++k) {
-                //     //     std::cout << "  Class " << std::setw(2) << scores[k].first 
-                //     //               << ": " << std::fixed << std::setprecision(4) 
-                //     //               << (scores[k].second * 100.0f) << "%" << std::endl;
-                //     // }
-                //     // std::cout << "True label: " << repeated_labels[i] << std::endl;
+                    // std::cout << "Top 5 predictions for current image:" << std::endl;
+                    // for (int k = 0; k < std::min(5, static_cast<int>(scores.size())); ++k) {
+                    //     std::cout << "  Class " << std::setw(2) << scores[k].first 
+                    //               << ": " << std::fixed << std::setprecision(4) 
+                    //               << (scores[k].second * 100.0f) << "%" << std::endl;
+                    // }
+                    // std::cout << "True label: " << repeated_labels[i] << std::endl;
                 // }
             }
             catch (const std::exception& e) {
@@ -824,7 +798,7 @@ int main(int argc, char** argv) {
         float throughput = 1000.0f / avg_time;
 
         std::cout << "\n=== Final Results ===" << std::endl;
-        std::cout << "Model type: CUDA Core" << std::endl;
+        std::cout << "Model type: Tensor Core" << std::endl;
         std::cout << "Total images: " << total_images << std::endl;
         std::cout << "Correct predictions: " << correct_count << std::endl;
         std::cout << "Accuracy: " << std::fixed << std::setprecision(2) << accuracy << "%" << std::endl;

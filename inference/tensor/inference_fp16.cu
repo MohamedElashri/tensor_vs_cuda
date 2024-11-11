@@ -709,14 +709,14 @@ void TensorCNNInference::loadWeights() {
     std::cout << "Loading FP16 model weights..." << std::endl;
     
     // Load the FP16 weights from binary files
-    auto conv1_weights = loadBinaryFile<half>("../../data/weights/conv1.weight_fp16.bin");
-    auto conv1_biases = loadBinaryFile<half>("../../data/weights/conv1.bias_fp16.bin");
-    auto conv2_weights = loadBinaryFile<half>("../../data/weights/conv2.weight_fp16.bin");
-    auto conv2_biases = loadBinaryFile<half>("../../data/weights/conv2.bias_fp16.bin");
-    auto fc1_weights = loadBinaryFile<half>("../../data/weights/fc1.weight_fp16.bin");
-    auto fc1_biases = loadBinaryFile<half>("../../data/weights/fc1.bias_fp16.bin");
-    auto fc2_weights = loadBinaryFile<half>("../../data/weights/fc2.weight_fp16.bin");
-    auto fc2_biases = loadBinaryFile<half>("../../data/weights/fc2.bias_fp16.bin");
+    auto conv1_weights = loadBinaryFile<half>("../../../data/weights/conv1.weight_fp16.bin");
+    auto conv1_biases = loadBinaryFile<half>("../../../data/weights/conv1.bias_fp16.bin");
+    auto conv2_weights = loadBinaryFile<half>("../../../data/weights/conv2.weight_fp16.bin");
+    auto conv2_biases = loadBinaryFile<half>("../../../data/weights/conv2.bias_fp16.bin");
+    auto fc1_weights = loadBinaryFile<half>("../../../data/weights/fc1.weight_fp16.bin");
+    auto fc1_biases = loadBinaryFile<half>("../../../data/weights/fc1.bias_fp16.bin");
+    auto fc2_weights = loadBinaryFile<half>("../../../data/weights/fc2.weight_fp16.bin");
+    auto fc2_biases = loadBinaryFile<half>("../../../data/weights/fc2.bias_fp16.bin");
     
     // Verify sizes based on PyTorch model shapes
     const size_t conv1_weights_size = 32 * 3 * 3 * 3;      // (32, 3, 3, 3)
@@ -833,8 +833,8 @@ int main(int argc, char** argv) {
     // Load validation data, set up the inference model, and evaluate
     try {
         std::cout << "Loading validation data..." << std::endl;
-        auto validation_images = loadBinaryFile<float>("../../data/validation/validation_images.bin");
-        auto validation_labels = loadBinaryFile<int>("../../data/validation/validation_labels.bin");
+        auto validation_images = loadBinaryFile<float>("../../../data/validation/validation_images.bin");
+        auto validation_labels = loadBinaryFile<int>("../../../data/validation/validation_labels.bin");
 
         // Original image size for CIFAR-10 (3 channels, 32x32 resolution)
         size_t image_size = 3 * 32 * 32;
