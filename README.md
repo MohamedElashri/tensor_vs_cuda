@@ -30,7 +30,7 @@ so to run on different machines you have to think about how to adjust `CMakeList
 
 ### Running the inference 
 
-Each binaries takes two arguments, the first is device id (GPU id number in case of multiple GPUs) and the second is `repeat factor` which define how many iteration of
+Each of the binaries takes two arguments, the first is device id (GPU id number in case of multiple GPUs) and the second is `repeat factor` which define how many iteration of
 CIFAR10 10000 images of validation data you want to run over (This is experiment about throughput not accuracy)
 
 Example
