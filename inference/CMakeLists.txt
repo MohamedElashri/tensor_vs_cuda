@@ -25,51 +25,45 @@ include_directories(${CUDA_INCLUDE_DIRS} ${CUDNN_INCLUDE_DIR})
 link_directories(${CUDA_TOOLKIT_ROOT_DIR}/lib64 ${CUDNN_LIBRARY_DIR})
 
 # CUDA architecture setting
-set(CMAKE_CUDA_ARCHITECTURES "75;80;86" CACHE STRING "CUDA architectures to build for")
+set(CMAKE_CUDA_ARCHITECTURES 80 CACHE STRING "CUDA architectures to build for")
 
-# Source groups (updated paths)
-set(CUDA_FP16_SOURCES cuda/inference_fp16.cu)
-set(CUDA_FP32_SOURCES cuda/inference_fp32.cu)
+# Source files with corrected paths
 set(TENSOR_FP16_SOURCES tensor/inference_fp16.cu)
 set(TENSOR_FP32_SOURCES tensor/inference_fp32.cu)
+set(STANDARD_FP16_SOURCES cuda/inference_fp16.cu)
+set(STANDARD_FP32_SOURCES cuda/inference_fp32.cu)
 
 # Common CUDA compile options
 set(CUDA_COMPILE_OPTIONS
     --use_fast_math
     -lineinfo
     --expt-relaxed-constexpr
+    -gencode arch=compute_80,code=sm_80
 )
 
-# Target configuration helper
-function(add_inference_target TARGET SOURCES)
-    add_executable(${TARGET} ${SOURCES})
-    target_include_directories(${TARGET} PRIVATE ${CUDA_INCLUDE_DIRS} ${CUDNN_INCLUDE_DIR})
-    target_link_libraries(${TARGET} PRIVATE cudart cublas cudnn cudnn_adv_infer cudnn_cnn_infer cudnn_ops_infer)
-    target_compile_options(${TARGET} PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_COMPILE_OPTIONS}>)
+# Batch sizes to build
+set(BATCH_SIZES 256 512)
+
+# Function to add inference target
+function(add_inference_target TARGET_NAME SOURCE_FILE BATCH_SIZE)
+    add_executable(${TARGET_NAME} ${SOURCE_FILE})
+    target_include_directories(${TARGET_NAME} PRIVATE ${CUDA_INCLUDE_DIRS} ${CUDNN_INCLUDE_DIR})
+    target_link_libraries(${TARGET_NAME} PRIVATE cudart cublas cudnn)
+    target_compile_options(${TARGET_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_COMPILE_OPTIONS}>)
+    target_compile_definitions(${TARGET_NAME} PRIVATE BATCH_SIZE=${BATCH_SIZE})
 endfunction()
 
-# Options for selective builds
-option(BUILD_FP16_ONLY "Build only FP16 versions" OFF)
-option(BUILD_FP32_ONLY "Build only FP32 versions" OFF)
-
-# Build selection logic
-if (BUILD_FP16_ONLY)
-    add_inference_target(inference_cuda_fp16 "${CUDA_FP16_SOURCES}")
-    add_inference_target(inference_tensor_fp16 "${TENSOR_FP16_SOURCES}")
-    message(STATUS "Building only FP16 versions")
-
-elseif (BUILD_FP32_ONLY)
-    add_inference_target(inference_cuda_fp32 "${CUDA_FP32_SOURCES}")
-    add_inference_target(inference_tensor_fp32 "${TENSOR_FP32_SOURCES}")
-    message(STATUS "Building only FP32 versions")
-
-else()
-    add_inference_target(inference_cuda_fp16 "${CUDA_FP16_SOURCES}")
-    add_inference_target(inference_cuda_fp32 "${CUDA_FP32_SOURCES}")
-    add_inference_target(inference_tensor_fp16 "${TENSOR_FP16_SOURCES}")
-    add_inference_target(inference_tensor_fp32 "${TENSOR_FP32_SOURCES}")
-    message(STATUS "Building both FP16 and FP32 versions")
-endif()
+# Build targets for each batch size
+foreach(BATCH_SIZE ${BATCH_SIZES})
+    # Build tensor_inference_fp16
+    add_inference_target(tensor_inference_fp16_bs${BATCH_SIZE} "${TENSOR_FP16_SOURCES}" ${BATCH_SIZE})
+    # Build tensor_inference_fp32
+    add_inference_target(tensor_inference_fp32_bs${BATCH_SIZE} "${TENSOR_FP32_SOURCES}" ${BATCH_SIZE})
+    # Build standard_inference_fp16
+    add_inference_target(standard_inference_fp16_bs${BATCH_SIZE} "${STANDARD_FP16_SOURCES}" ${BATCH_SIZE})
+    # Build standard_inference_fp32
+    add_inference_target(standard_inference_fp32_bs${BATCH_SIZE} "${STANDARD_FP32_SOURCES}" ${BATCH_SIZE})
+endforeach()
 
 # Set build type
 set(CMAKE_BUILD_TYPE Release)

@@ -1,5 +1,3 @@
-// CUDA Cores + Tensor Cores Inference Engine
-
 #include </usr/include/cudnn.h>
 #include <cuda_runtime.h>
 #include <iostream>
@@ -11,181 +9,174 @@
 #include <iomanip>
 #include <cuda_fp16.h>
 
-// Utility function to convert between FP32 and FP16
-__global__ void convertFP32ToFP16(float* input, half* output, int size) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < size) {
-        output[idx] = __float2half(input[idx]);
+// CUDA error checking
+#define CHECK_CUDA_ERROR(val) check((val), #val, __FILE__, __LINE__)
+template<typename T>
+void check(T err, const char* const func, const char* const file,
+           const int line) {
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA Runtime Error at: " << file << ":" << line
+                  << std::endl;
+        std::cerr << cudaGetErrorString(err) << " " << func << std::endl;
+        std::exit(EXIT_FAILURE);
     }
+}
+
+// Helper kernels for FP32 to FP16 and vice versa
+__global__ void convertFP32ToFP16(float* input, half* output, int size) {
+   int idx = blockIdx.x * blockDim.x + threadIdx.x;
+   if (idx < size) {
+       output[idx] = __float2half(input[idx]);
+   }
 }
 
 __global__ void convertFP16ToFP32(half* input, float* output, int size) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < size) {
-        output[idx] = __half2float(input[idx]);
-    }
+   int idx = blockIdx.x * blockDim.x + threadIdx.x;
+   if (idx < size) {
+       output[idx] = __half2float(input[idx]);
+   }
 }
 
-// Helper function to launch conversion kernels
 void convertToFP16(float* input, half* output, int size) {
-    int blockSize = 256;
-    int numBlocks = (size + blockSize - 1) / blockSize;
-    convertFP32ToFP16<<<numBlocks, blockSize>>>(input, output, size);
+   int blockSize = 256;
+   int numBlocks = (size + blockSize - 1) / blockSize;
+   convertFP32ToFP16<<<numBlocks, blockSize>>>(input, output, size);
+   CHECK_CUDA_ERROR(cudaGetLastError());
 }
 
 void convertToFP32(half* input, float* output, int size) {
-    int blockSize = 256;
-    int numBlocks = (size + blockSize - 1) / blockSize;
-    convertFP16ToFP32<<<numBlocks, blockSize>>>(input, output, size);
+   int blockSize = 256;
+   int numBlocks = (size + blockSize - 1) / blockSize;
+   convertFP16ToFP32<<<numBlocks, blockSize>>>(input, output, size);
+   CHECK_CUDA_ERROR(cudaGetLastError());
 }
 
 template <typename T>
 std::vector<T> loadBinaryFile(const std::string& filename) {
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        std::cerr << "Error: Could not open file " << filename << std::endl;
-        std::exit(EXIT_FAILURE);
-    }
-    
-    // Get file size in bytes
-    file.seekg(0, std::ios::end);
-    size_t file_size = file.tellg();
-    file.seekg(0, std::ios::beg);
-    
-    // Calculate number of elements
-    size_t num_elements = file_size / sizeof(T);
-    
-    std::cout << "Loading " << filename << " - File size: " << file_size 
-              << " bytes, Elements: " << num_elements << std::endl;
-    
-    std::vector<T> buffer(num_elements);
-    file.read(reinterpret_cast<char*>(buffer.data()), file_size);
-    file.close();
-    
-    return buffer;
+   std::ifstream file(filename, std::ios::binary);
+   if (!file.is_open()) {
+       std::cerr << "Error: Could not open file " << filename << std::endl;
+       std::exit(EXIT_FAILURE);
+   }
+   
+   file.seekg(0, std::ios::end);
+   size_t file_size = file.tellg();
+   file.seekg(0, std::ios::beg);
+   
+   size_t num_elements = file_size / sizeof(T);
+   
+   std::vector<T> buffer(num_elements);
+   file.read(reinterpret_cast<char*>(buffer.data()), file_size);
+   file.close();
+   
+   return buffer;
 }
 
-// Add specialized version for half
 template <>
 std::vector<half> loadBinaryFile<half>(const std::string& filename) {
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        std::cerr << "Error: Could not open file " << filename << std::endl;
-        std::exit(EXIT_FAILURE);
-    }
-    file.seekg(0, std::ios::end);
-    size_t size = file.tellg() / sizeof(half);
-    file.seekg(0, std::ios::beg);
-    std::vector<half> buffer(size);
-    file.read(reinterpret_cast<char*>(buffer.data()), size * sizeof(half));
-    file.close();
-    return buffer;
+   std::ifstream file(filename, std::ios::binary);
+   if (!file.is_open()) {
+       std::cerr << "Error: Could not open file " << filename << std::endl;
+       std::exit(EXIT_FAILURE);
+   }
+   file.seekg(0, std::ios::end);
+   size_t size = file.tellg() / sizeof(half);
+   file.seekg(0, std::ios::beg);
+   std::vector<half> buffer(size);
+   file.read(reinterpret_cast<char*>(buffer.data()), size * sizeof(half));
+   file.close();
+   return buffer;
 }
 
-// Helper function to handle CuDNN errors
-#define CUDNN_CHECK(call) {                                                        \
-    cudnnStatus_t err = call;                                                     \
-    if (err != CUDNN_STATUS_SUCCESS) {                                           \
-        std::cerr << "CuDNN Error at " << __FILE__ << ":" << __LINE__ << ": "   \
-                  << cudnnGetErrorString(err) << std::endl;                      \
-        std::exit(EXIT_FAILURE);                                                 \
-    }                                                                            \
+#define CUDNN_CHECK(call) { \
+   cudnnStatus_t err = call; \
+   if (err != CUDNN_STATUS_SUCCESS) { \
+       std::cerr << "CuDNN Error: " << cudnnGetErrorString(err) << std::endl; \
+       std::exit(EXIT_FAILURE); \
+   } \
 }
 
-// Helper function to handle CUDA errors
-#define CUDA_CHECK(call) {                                                        \
-    cudaError_t err = call;                                                      \
-    if (err != cudaSuccess) {                                                    \
-        std::cerr << "CUDA Error at " << __FILE__ << ":" << __LINE__ << ": "    \
-                  << cudaGetErrorString(err) << std::endl;                       \
-        std::exit(EXIT_FAILURE);                                                 \
-    }                                                                            \
+#define CUDA_CHECK(call) { \
+   cudaError_t err = call; \
+   if (err != cudaSuccess) { \
+       std::cerr << "CUDA Error: " << cudaGetErrorString(err) << std::endl; \
+       std::exit(EXIT_FAILURE); \
+   } \
 }
 
 class TensorCNNInference {
 public:
-    TensorCNNInference();
-    ~ TensorCNNInference();
-    void loadWeights();
-    void initializeLayers();
-    void checkTensorCoreUsage();
-    void infer(const std::vector<float>& input_data);
-    std::vector<float> getOutput();
-    void evaluate(const std::vector<std::vector<float>>& images, 
-                 const std::vector<int>& labels);
+   TensorCNNInference(int batch_size, const std::string& weights_path);
+   ~TensorCNNInference();
+   void loadWeights(const std::string& weights_path);
+   void initializeLayers();
+   void checkTensorCoreUsage();
+   void infer(const std::vector<float>& input_data);
+   std::vector<float> getOutput();
+
 private:
-    cudnnHandle_t cudnn;
-    
-    // Layer descriptors
-    cudnnTensorDescriptor_t input_desc;
-    cudnnTensorDescriptor_t conv1_output_desc;
-    cudnnTensorDescriptor_t pool1_output_desc;
-    cudnnTensorDescriptor_t conv2_output_desc;
-    cudnnTensorDescriptor_t pool2_output_desc;
-    cudnnTensorDescriptor_t pool2_flat_desc;
-    cudnnTensorDescriptor_t fc1_output_desc;
-    cudnnTensorDescriptor_t fc2_output_desc;
+   cudnnHandle_t cudnn;
+   
+   cudnnTensorDescriptor_t input_desc;
+   cudnnTensorDescriptor_t conv1_output_desc;
+   cudnnTensorDescriptor_t pool1_output_desc;
+   cudnnTensorDescriptor_t conv2_output_desc;
+   cudnnTensorDescriptor_t pool2_output_desc;
+   cudnnTensorDescriptor_t pool2_flat_desc;
+   cudnnTensorDescriptor_t fc1_output_desc;
+   cudnnTensorDescriptor_t fc2_output_desc;
 
-    // Filter descriptors
-    cudnnFilterDescriptor_t conv1_filter_desc;
-    cudnnFilterDescriptor_t conv2_filter_desc;
-    cudnnFilterDescriptor_t fc1_filter_desc;
-    cudnnFilterDescriptor_t fc2_filter_desc;
-    
-    // Bias descriptors
-    cudnnTensorDescriptor_t conv1_bias_desc;
-    cudnnTensorDescriptor_t conv2_bias_desc;
-    cudnnTensorDescriptor_t fc1_bias_desc;
-    cudnnTensorDescriptor_t fc2_bias_desc;
-    
-    // Convolution descriptors
-    cudnnConvolutionDescriptor_t conv1_desc;
-    cudnnConvolutionDescriptor_t conv2_desc;
-    cudnnConvolutionDescriptor_t fc1_desc;
-    cudnnConvolutionDescriptor_t fc2_desc;
-    
-    // Activation and pooling descriptors
-    cudnnActivationDescriptor_t relu_activation;
-    cudnnPoolingDescriptor_t pooling_desc;
+   cudnnFilterDescriptor_t conv1_filter_desc;
+   cudnnFilterDescriptor_t conv2_filter_desc;
+   cudnnFilterDescriptor_t fc1_filter_desc;
+   cudnnFilterDescriptor_t fc2_filter_desc;
+   
+   cudnnTensorDescriptor_t conv1_bias_desc;
+   cudnnTensorDescriptor_t conv2_bias_desc;
+   cudnnTensorDescriptor_t fc1_bias_desc;
+   cudnnTensorDescriptor_t fc2_bias_desc;
+   
+   cudnnConvolutionDescriptor_t conv1_desc;
+   cudnnConvolutionDescriptor_t conv2_desc;
+   cudnnConvolutionDescriptor_t fc1_desc;
+   cudnnConvolutionDescriptor_t fc2_desc;
+   
+   cudnnActivationDescriptor_t relu_activation;
+   cudnnPoolingDescriptor_t pooling_desc;
+   
+   cudnnConvolutionFwdAlgo_t conv1_algo;
+   cudnnConvolutionFwdAlgo_t conv2_algo;
+   cudnnConvolutionFwdAlgo_t fc1_algo;
+   cudnnConvolutionFwdAlgo_t fc2_algo;
 
-    // Convolution algorithms
-    cudnnConvolutionFwdAlgo_t conv1_algo;
-    cudnnConvolutionFwdAlgo_t conv2_algo;
-    cudnnConvolutionFwdAlgo_t fc1_algo;
-    cudnnConvolutionFwdAlgo_t fc2_algo;
+   int batch_size;
 
-    // Device memory pointers
-    float *d_input;
-    half *d_conv1_weight, *d_conv1_bias, *d_conv1_output;
-    half *d_pool1_output;
-    half *d_conv2_weight, *d_conv2_bias, *d_conv2_output;
-    half *d_pool2_output;
-    half *d_fc1_weight, *d_fc1_bias, *d_fc1_output;
-    half *d_fc2_weight, *d_fc2_bias, *d_fc2_output;
-    
-    // Workspace for convolutions
-    size_t workspace_size;
-    void *d_workspace;
+   float *d_input;
+   half *d_conv1_weight, *d_conv1_bias, *d_conv1_output;
+   half *d_pool1_output;
+   half *d_conv2_weight, *d_conv2_bias, *d_conv2_output;
+   half *d_pool2_output;
+   half *d_fc1_weight, *d_fc1_bias, *d_fc1_output;
+   half *d_fc2_weight, *d_fc2_bias, *d_fc2_output;
+   
+   size_t workspace_size;
+   void *d_workspace;
 
-    // Dimensions
-    int batch_size;
-    struct LayerDims {
-        int n, c, h, w;
-    };
-    LayerDims input_dims, conv1_dims, pool1_dims, conv2_dims, pool2_dims, 
+   struct LayerDims {
+       int n, c, h, w;
+   };
+       LayerDims input_dims, conv1_dims, pool1_dims, conv2_dims, pool2_dims, 
               fc1_dims, fc2_dims;
-
-    // Find best convolution algorithm that uses Tensor Cores
-    cudnnConvolutionFwdAlgo_t findBestConvAlgorithm(
-        cudnnTensorDescriptor_t input_desc,
-        cudnnFilterDescriptor_t filter_desc,
-        cudnnConvolutionDescriptor_t conv_desc,
-        cudnnTensorDescriptor_t output_desc,
-        size_t* workspace_size);
-
+   cudnnConvolutionFwdAlgo_t findBestConvAlgorithm(
+       cudnnTensorDescriptor_t input_desc,
+       cudnnFilterDescriptor_t filter_desc,
+       cudnnConvolutionDescriptor_t conv_desc,
+       cudnnTensorDescriptor_t output_desc,
+       size_t* workspace_size);
 };
 
-TensorCNNInference::TensorCNNInference() : batch_size(1) {
+TensorCNNInference::TensorCNNInference(int batch_size_, const std::string& weights_path)
+    : batch_size(batch_size_) {
     std::cout << "Initializing TensorCore CNN..." << std::endl;
     
     // Create cuDNN handle first
@@ -220,7 +211,7 @@ TensorCNNInference::TensorCNNInference() : batch_size(1) {
     CUDNN_CHECK(cudnnCreatePoolingDescriptor(&pooling_desc));
 
     // Now load weights and initialize layers
-    loadWeights();
+    loadWeights(weights_path);
     initializeLayers();
     checkTensorCoreUsage();
 }
@@ -274,7 +265,6 @@ cudnnConvolutionFwdAlgo_t TensorCNNInference::findBestConvAlgorithm(
     return bestAlgo;
 }
 
-
 void TensorCNNInference::initializeLayers() {
     // Input dimensions configuration
     input_dims = {batch_size, 3, 32, 32};
@@ -284,7 +274,6 @@ void TensorCNNInference::initializeLayers() {
         input_dims.n, input_dims.c, input_dims.h, input_dims.w));
 
     // Conv1 layer configuration
-    conv1_dims = {batch_size, 32, 32, 32};
     CUDNN_CHECK(cudnnSetFilter4dDescriptor(conv1_filter_desc, 
         CUDNN_DATA_HALF, 
         CUDNN_TENSOR_NCHW, 
@@ -299,6 +288,10 @@ void TensorCNNInference::initializeLayers() {
     
     CUDNN_CHECK(cudnnSetConvolutionMathType(conv1_desc, CUDNN_TENSOR_OP_MATH));
     
+    // Get Conv1 output dimensions
+    CUDNN_CHECK(cudnnGetConvolution2dForwardOutputDim(conv1_desc, input_desc, 
+        conv1_filter_desc, &conv1_dims.n, &conv1_dims.c, &conv1_dims.h, &conv1_dims.w));
+
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(conv1_output_desc, 
         CUDNN_TENSOR_NCHW,
         CUDNN_DATA_HALF,  // Changed to HALF
@@ -317,15 +310,17 @@ void TensorCNNInference::initializeLayers() {
         0, 0,    // padding
         2, 2));  // stride
 
-    // Pool1 layer configuration
-    pool1_dims = {conv1_dims.n, conv1_dims.c, conv1_dims.h/2, conv1_dims.w/2};
+    // Get Pool1 dimensions
+    CUDNN_CHECK(cudnnGetPooling2dForwardOutputDim(pooling_desc,
+        conv1_output_desc,
+        &pool1_dims.n, &pool1_dims.c, &pool1_dims.h, &pool1_dims.w));
+
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(pool1_output_desc, 
         CUDNN_TENSOR_NCHW,
         CUDNN_DATA_HALF,  // Changed to HALF
         pool1_dims.n, pool1_dims.c, pool1_dims.h, pool1_dims.w));
 
     // Conv2 layer configuration
-    conv2_dims = {pool1_dims.n, 64, pool1_dims.h, pool1_dims.w};
     CUDNN_CHECK(cudnnSetFilter4dDescriptor(conv2_filter_desc, 
         CUDNN_DATA_HALF, 
         CUDNN_TENSOR_NCHW, 
@@ -340,6 +335,10 @@ void TensorCNNInference::initializeLayers() {
     
     CUDNN_CHECK(cudnnSetConvolutionMathType(conv2_desc, CUDNN_TENSOR_OP_MATH));
     
+    // Get Conv2 output dimensions
+    CUDNN_CHECK(cudnnGetConvolution2dForwardOutputDim(conv2_desc, pool1_output_desc, 
+        conv2_filter_desc, &conv2_dims.n, &conv2_dims.c, &conv2_dims.h, &conv2_dims.w));
+
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(conv2_output_desc, 
         CUDNN_TENSOR_NCHW,
         CUDNN_DATA_HALF,  // Changed to HALF
@@ -351,7 +350,10 @@ void TensorCNNInference::initializeLayers() {
         1, conv2_dims.c, 1, 1));
 
     // Pool2 layer configuration
-    pool2_dims = {conv2_dims.n, conv2_dims.c, conv2_dims.h/2, conv2_dims.w/2};
+    CUDNN_CHECK(cudnnGetPooling2dForwardOutputDim(pooling_desc,
+        conv2_output_desc,
+        &pool2_dims.n, &pool2_dims.c, &pool2_dims.h, &pool2_dims.w));
+
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(pool2_output_desc, 
         CUDNN_TENSOR_NCHW,
         CUDNN_DATA_HALF,  // Changed to HALF
@@ -365,7 +367,6 @@ void TensorCNNInference::initializeLayers() {
         batch_size, fc_input_size, 1, 1));
 
     // FC1 layer configuration
-    fc1_dims = {batch_size, 128, 1, 1};
     CUDNN_CHECK(cudnnSetFilter4dDescriptor(fc1_filter_desc, 
         CUDNN_DATA_HALF,
         CUDNN_TENSOR_NCHW, 
@@ -383,15 +384,14 @@ void TensorCNNInference::initializeLayers() {
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(fc1_output_desc, 
         CUDNN_TENSOR_NCHW,
         CUDNN_DATA_HALF,  // Changed to HALF
-        fc1_dims.n, fc1_dims.c, fc1_dims.h, fc1_dims.w));
+        batch_size, 128, 1, 1));
     
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(fc1_bias_desc, 
         CUDNN_TENSOR_NCHW,
         CUDNN_DATA_HALF,  // Changed to HALF
-        1, fc1_dims.c, 1, 1));
+        1, 128, 1, 1));
 
     // FC2 layer configuration
-    fc2_dims = {batch_size, 10, 1, 1};
     CUDNN_CHECK(cudnnSetFilter4dDescriptor(fc2_filter_desc, 
         CUDNN_DATA_HALF,
         CUDNN_TENSOR_NCHW, 
@@ -409,12 +409,12 @@ void TensorCNNInference::initializeLayers() {
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(fc2_output_desc, 
         CUDNN_TENSOR_NCHW,
         CUDNN_DATA_HALF,  // Changed to HALF
-        fc2_dims.n, fc2_dims.c, fc2_dims.h, fc2_dims.w));
+        batch_size, 10, 1, 1));
     
     CUDNN_CHECK(cudnnSetTensor4dDescriptor(fc2_bias_desc, 
         CUDNN_TENSOR_NCHW,
         CUDNN_DATA_HALF,  // Changed to HALF
-        1, fc2_dims.c, 1, 1));
+        1, 10, 1, 1));
 
     // ReLU activation configuration
     CUDNN_CHECK(cudnnSetActivationDescriptor(relu_activation,
@@ -442,8 +442,8 @@ void TensorCNNInference::initializeLayers() {
     CUDA_CHECK(cudaMalloc(&d_pool1_output, batch_size * pool1_dims.c * pool1_dims.h * pool1_dims.w * sizeof(half)));
     CUDA_CHECK(cudaMalloc(&d_conv2_output, batch_size * conv2_dims.c * conv2_dims.h * conv2_dims.w * sizeof(half)));
     CUDA_CHECK(cudaMalloc(&d_pool2_output, batch_size * pool2_dims.c * pool2_dims.h * pool2_dims.w * sizeof(half)));
-    CUDA_CHECK(cudaMalloc(&d_fc1_output, batch_size * fc1_dims.c * sizeof(half)));
-    CUDA_CHECK(cudaMalloc(&d_fc2_output, batch_size * fc2_dims.c * sizeof(half)));
+    CUDA_CHECK(cudaMalloc(&d_fc1_output, batch_size * 128 * sizeof(half)));
+    CUDA_CHECK(cudaMalloc(&d_fc2_output, batch_size * 10 * sizeof(half)));
 
     std::cout << "Layer initialization complete." << std::endl;
     std::cout << "Workspace size: " << workspace_size / (1024.0 * 1024.0) << " MB" << std::endl;
@@ -503,6 +503,12 @@ void TensorCNNInference::infer(const std::vector<float>& input_data) {
     const float beta_f = 0.0f;
     const void* alpha_ptr = &alpha_f;
     const void* beta_ptr = &beta_f;
+
+    // Verify input data size and copy to device
+    size_t expected_input_size = batch_size * 3 * 32 * 32;
+    if (input_data.size() != expected_input_size) {
+        throw std::runtime_error("Input data size mismatch");
+    }
 
     // Copy input FP32 data to device
     CUDA_CHECK(cudaMemcpy(d_input, input_data.data(), 
@@ -625,35 +631,37 @@ void TensorCNNInference::infer(const std::vector<float>& input_data) {
 }
 
 std::vector<float> TensorCNNInference::getOutput() {
-    std::vector<float> output(10);
-    
+    size_t output_size = batch_size * 10;
+    std::vector<float> output(output_size);
+
     // Convert FP16 output to FP32
     float* d_output_float;
-    CUDA_CHECK(cudaMalloc(&d_output_float, 10 * sizeof(float)));
-    convertToFP32((half*)d_fc2_output, d_output_float, 10);
-    
+    CUDA_CHECK(cudaMalloc(&d_output_float, output_size * sizeof(float)));
+    convertToFP32((half*)d_fc2_output, d_output_float, output_size);
+
     // Copy the FP32 output from device to host
     CUDA_CHECK(cudaMemcpy(output.data(), d_output_float, 
                          output.size() * sizeof(float), cudaMemcpyDeviceToHost));
     
     cudaFree(d_output_float);
-    
-    // Apply softmax normalization
-    float max_val = *std::max_element(output.begin(), output.end());
-    float sum = 0.0f;
-    
-    for (float& val : output) {
-        val = std::exp(val - max_val);
-        sum += val;
+
+    // Apply softmax normalization for each sample
+    for (int i = 0; i < batch_size; ++i) {
+        float max_val = *std::max_element(output.begin() + i * 10, output.begin() + (i + 1) * 10);
+        float sum = 0.0f;
+
+        for (int j = 0; j < 10; ++j) {
+            output[i * 10 + j] = std::exp(output[i * 10 + j] - max_val);
+            sum += output[i * 10 + j];
+        }
+
+        for (int j = 0; j < 10; ++j) {
+            output[i * 10 + j] /= sum;
+        }
     }
-    
-    for (float& val : output) {
-        val /= sum;
-    }
-    
+
     return output;
 }
-
 
 TensorCNNInference::~TensorCNNInference() {
     // Free device memory
@@ -705,19 +713,29 @@ TensorCNNInference::~TensorCNNInference() {
     cudnnDestroy(cudnn);
 }
 
-void TensorCNNInference::loadWeights() {
+void TensorCNNInference::loadWeights(const std::string& weights_path) {
     std::cout << "Loading FP16 model weights..." << std::endl;
-    
+
+    // Build full paths to weight files
+    std::string conv1_weight_path = weights_path + "/conv1.weight_fp16.bin";
+    std::string conv1_bias_path = weights_path + "/conv1.bias_fp16.bin";
+    std::string conv2_weight_path = weights_path + "/conv2.weight_fp16.bin";
+    std::string conv2_bias_path = weights_path + "/conv2.bias_fp16.bin";
+    std::string fc1_weight_path = weights_path + "/fc1.weight_fp16.bin";
+    std::string fc1_bias_path = weights_path + "/fc1.bias_fp16.bin";
+    std::string fc2_weight_path = weights_path + "/fc2.weight_fp16.bin";
+    std::string fc2_bias_path = weights_path + "/fc2.bias_fp16.bin";
+
     // Load the FP16 weights from binary files
-    auto conv1_weights = loadBinaryFile<half>("../../../data/weights/conv1.weight_fp16.bin");
-    auto conv1_biases = loadBinaryFile<half>("../../../data/weights/conv1.bias_fp16.bin");
-    auto conv2_weights = loadBinaryFile<half>("../../../data/weights/conv2.weight_fp16.bin");
-    auto conv2_biases = loadBinaryFile<half>("../../../data/weights/conv2.bias_fp16.bin");
-    auto fc1_weights = loadBinaryFile<half>("../../../data/weights/fc1.weight_fp16.bin");
-    auto fc1_biases = loadBinaryFile<half>("../../../data/weights/fc1.bias_fp16.bin");
-    auto fc2_weights = loadBinaryFile<half>("../../../data/weights/fc2.weight_fp16.bin");
-    auto fc2_biases = loadBinaryFile<half>("../../../data/weights/fc2.bias_fp16.bin");
-    
+    auto conv1_weights = loadBinaryFile<half>(conv1_weight_path);
+    auto conv1_biases = loadBinaryFile<half>(conv1_bias_path);
+    auto conv2_weights = loadBinaryFile<half>(conv2_weight_path);
+    auto conv2_biases = loadBinaryFile<half>(conv2_bias_path);
+    auto fc1_weights = loadBinaryFile<half>(fc1_weight_path);
+    auto fc1_biases = loadBinaryFile<half>(fc1_bias_path);
+    auto fc2_weights = loadBinaryFile<half>(fc2_weight_path);
+    auto fc2_biases = loadBinaryFile<half>(fc2_bias_path);
+
     // Verify sizes based on PyTorch model shapes
     const size_t conv1_weights_size = 32 * 3 * 3 * 3;      // (32, 3, 3, 3)
     const size_t conv1_bias_size = 32;                     // (32,)
@@ -727,25 +745,6 @@ void TensorCNNInference::loadWeights() {
     const size_t fc1_bias_size = 128;                      // (128,)
     const size_t fc2_weights_size = 10 * 128;              // (10, 128)
     const size_t fc2_bias_size = 10;                       // (10,)
-
-    // Debug print
-    std::cout << "\nWeight sizes comparison:" << std::endl;
-    std::cout << "Conv1 weights - Expected: " << conv1_weights_size << ", Actual: " << conv1_weights.size() 
-              << " (Shape: 32x3x3x3)" << std::endl;
-    std::cout << "Conv1 bias - Expected: " << conv1_bias_size << ", Actual: " << conv1_biases.size() 
-              << " (Shape: 32)" << std::endl;
-    std::cout << "Conv2 weights - Expected: " << conv2_weights_size << ", Actual: " << conv2_weights.size() 
-              << " (Shape: 64x32x3x3)" << std::endl;
-    std::cout << "Conv2 bias - Expected: " << conv2_bias_size << ", Actual: " << conv2_biases.size() 
-              << " (Shape: 64)" << std::endl;
-    std::cout << "FC1 weights - Expected: " << fc1_weights_size << ", Actual: " << fc1_weights.size() 
-              << " (Shape: 128x4096)" << std::endl;
-    std::cout << "FC1 bias - Expected: " << fc1_bias_size << ", Actual: " << fc1_biases.size() 
-              << " (Shape: 128)" << std::endl;
-    std::cout << "FC2 weights - Expected: " << fc2_weights_size << ", Actual: " << fc2_weights.size() 
-              << " (Shape: 10x128)" << std::endl;
-    std::cout << "FC2 bias - Expected: " << fc2_bias_size << ", Actual: " << fc2_biases.size() 
-              << " (Shape: 10)" << std::endl;
 
     // Verify sizes
     if (conv1_weights.size() != conv1_weights_size ||
@@ -758,10 +757,7 @@ void TensorCNNInference::loadWeights() {
         fc2_biases.size() != fc2_bias_size) {
         
         std::stringstream error_msg;
-        error_msg << "Weight file sizes do not match expected dimensions:\n";
-        error_msg << "Conv1 weights: expected " << conv1_weights_size << ", got " << conv1_weights.size() << "\n";
-        error_msg << "Conv1 bias: expected " << conv1_bias_size << ", got " << conv1_biases.size() << "\n";
-        // Add similar lines for other weights...
+        error_msg << "Weight file sizes do not match expected dimensions.\n";
         throw std::runtime_error(error_msg.str());
     }    
     // Allocate and copy weights to device
@@ -803,50 +799,48 @@ void TensorCNNInference::loadWeights() {
     std::cout << "Successfully loaded all FP16 weights to GPU." << std::endl;
 }
 
-void parseArguments(int argc, char** argv, int& gpu_id, int& repeat_factor) {
-    if (argc >= 3) {
+void parseArguments(int argc, char** argv, int& gpu_id, int& repeat_factor, int& batch_size, std::string& data_path, std::string& weights_path) {
+    if (argc >= 6) {
         gpu_id = std::atoi(argv[1]);
         repeat_factor = std::atoi(argv[2]);
+        batch_size = std::atoi(argv[3]);
+        data_path = argv[4];
+        weights_path = argv[5];
     } else {
-        std::cerr << "Usage: " << argv[0] << " <gpu_id> <repeat_factor>" << std::endl;
-        std::cerr << "Example: " << argv[0] << " 0 10" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <gpu_id> <repeat_factor> <batch_size> <data_path> <weights_path>" << std::endl;
+        std::cerr << "Example: " << argv[0] << " 0 10 256 /path/to/data/validation /path/to/data/weights" << std::endl;
         std::exit(EXIT_FAILURE);
     }
 }
 
-
-
-
 int main(int argc, char** argv) {
     int gpu_id = 0;
     int repeat_factor = 1;
+    int batch_size = 256;
+    std::string data_path;
+    std::string weights_path;
 
-    // Parse GPU ID and repeat factor from arguments
-    parseArguments(argc, argv, gpu_id, repeat_factor);
-
-    // Set the GPU device at runtime
+    parseArguments(argc, argv, gpu_id, repeat_factor, batch_size, data_path, weights_path);
     CUDA_CHECK(cudaSetDevice(gpu_id));
 
     std::cout << "Running on GPU: " << gpu_id << std::endl;
     std::cout << "Repeat factor: " << repeat_factor << std::endl;
+    std::cout << "Batch size: " << batch_size << std::endl;
 
-    // Load validation data, set up the inference model, and evaluate
     try {
-        std::cout << "Loading validation data..." << std::endl;
-        auto validation_images = loadBinaryFile<float>("../../../data/validation/validation_images.bin");
-        auto validation_labels = loadBinaryFile<int>("../../../data/validation/validation_labels.bin");
+        auto validation_images_path = data_path + "/validation_images.bin";
+        auto validation_labels_path = data_path + "/validation_labels.bin";
 
-        // Original image size for CIFAR-10 (3 channels, 32x32 resolution)
+        auto validation_images = loadBinaryFile<float>(validation_images_path);
+        auto validation_labels = loadBinaryFile<int>(validation_labels_path);
+
         size_t image_size = 3 * 32 * 32;
-
-        // Organize the original data into individual images
         std::vector<std::vector<float>> images;
         for (size_t i = 0; i < validation_images.size(); i += image_size) {
             images.push_back(std::vector<float>(validation_images.begin() + i, 
                                               validation_images.begin() + i + image_size));
         }
 
-        // Repeat the dataset
         std::vector<std::vector<float>> repeated_images;
         std::vector<int> repeated_labels;
 
@@ -855,20 +849,12 @@ int main(int argc, char** argv) {
             repeated_labels.insert(repeated_labels.end(), validation_labels.begin(), validation_labels.end());
         }
         
-        int total_images = repeated_images.size();
-
+        size_t total_images = repeated_images.size();
         std::cout << "Total images after repeating: " << total_images << std::endl;
 
-        std::cout << "Creating Tensor Core inference engine..." << std::endl;
-        TensorCNNInference cnn;
-        
-        // Print Tensor Core capabilities and configuration
+        TensorCNNInference cnn(batch_size, weights_path);
         cnn.checkTensorCoreUsage();
 
-        std::cout << "\n=== Starting Evaluation ===" << std::endl;
-        std::cout << "Model type: Tensor Core" << std::endl;
-
-        // Create CUDA events for timing
         cudaEvent_t start, stop;
         CUDA_CHECK(cudaEventCreate(&start));
         CUDA_CHECK(cudaEventCreate(&stop));
@@ -876,84 +862,83 @@ int main(int argc, char** argv) {
         size_t correct_count = 0;
         float total_time = 0.0f;
 
-        // Warmup run
-        std::cout << "Performing warmup runs..." << std::endl;
+        // Warmup with first batch
+        std::vector<float> warmup_batch;
+        warmup_batch.reserve(batch_size * image_size);
+        for (int i = 0; i < batch_size && i < total_images; ++i) {
+            warmup_batch.insert(warmup_batch.end(), repeated_images[i].begin(), repeated_images[i].end());
+        }
         for (int i = 0; i < 10; i++) {
-            cnn.infer(repeated_images[0]);
+            cnn.infer(warmup_batch);
         }
 
-        // Main evaluation loop
+        // Main evaluation loop with batching
+        size_t total_batches = (total_images + batch_size - 1) / batch_size;
         std::cout << "Starting main evaluation..." << std::endl;
-        for (size_t i = 0; i < total_images; ++i) {
-            try {
-                CUDA_CHECK(cudaEventRecord(start));
-                
-                cnn.infer(repeated_images[i]);
-                std::vector<float> output = cnn.getOutput();
-                
-                CUDA_CHECK(cudaEventRecord(stop));
-                CUDA_CHECK(cudaEventSynchronize(stop));
-                
-                float milliseconds = 0;
-                CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
-                total_time += milliseconds;
 
-                int predicted_label = std::distance(output.begin(), 
-                                                    std::max_element(output.begin(), output.end()));
-                
-                if (predicted_label == repeated_labels[i]) {
+        for (size_t batch_idx = 0; batch_idx < total_batches; ++batch_idx) {
+            size_t batch_start = batch_idx * batch_size;
+            size_t batch_end = std::min(batch_start + batch_size, total_images);
+            size_t current_batch_size = batch_end - batch_start;
+
+            std::vector<float> batch_input;
+            batch_input.reserve(batch_size * image_size);
+
+            // Load actual images
+            for (size_t i = batch_start; i < batch_end; ++i) {
+                batch_input.insert(batch_input.end(), repeated_images[i].begin(), repeated_images[i].end());
+            }
+
+            // Pad the batch if necessary
+            if (current_batch_size < batch_size) {
+                // Duplicate the last image to fill the batch
+                const auto& last_image = repeated_images[batch_end - 1];
+                for (size_t i = current_batch_size; i < batch_size; ++i) {
+                    batch_input.insert(batch_input.end(), last_image.begin(), last_image.end());
+                }
+            }
+
+            CUDA_CHECK(cudaEventRecord(start));
+            cnn.infer(batch_input);
+            std::vector<float> output = cnn.getOutput();
+            CUDA_CHECK(cudaEventRecord(stop));
+            CUDA_CHECK(cudaEventSynchronize(stop));
+            
+            float milliseconds = 0;
+            CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
+            total_time += milliseconds;
+
+            for (size_t i = 0; i < current_batch_size; ++i) {
+                int predicted_label = std::distance(
+                    output.begin() + i * 10,
+                    std::max_element(output.begin() + i * 10, output.begin() + (i + 1) * 10)
+                );
+                if (predicted_label == repeated_labels[batch_start + i]) {
                     ++correct_count;
                 }
-
-                // if (i % 100 == 0) {
-                //     float running_accuracy = (static_cast<float>(correct_count) / (i + 1)) * 100.0f;
-
-                    // Print intermediate statistics (debugging)
-                    // std::cout << "\nProcessed " << i + 1 << "/" << total_images << " images" << std::endl;
-                    // std::cout << "Running accuracy: " << std::fixed << std::setprecision(2) 
-                    //           << running_accuracy << "%" << std::endl;
-                    // std::cout << "Current inference time: " << std::fixed << std::setprecision(3) 
-                    //           << milliseconds << " ms" << std::endl;
-                    
-                    // Print top 5 predictions for current image (debugging)
-                    // std::vector<std::pair<int, float>> scores;
-                    // for (size_t j = 0; j < output.size(); ++j) {
-                    //     scores.emplace_back(j, output[j]);
-                    // }
-                    // std::sort(scores.begin(), scores.end(),
-                    //           [](const auto& a, const auto& b) { return a.second > b.second; });
-                    
-                    // std::cout << "Top 5 predictions for current image:" << std::endl;
-                    // for (int k = 0; k < std::min(5, static_cast<int>(scores.size())); ++k) {
-                    //     std::cout << "  Class " << std::setw(2) << scores[k].first 
-                    //               << ": " << std::fixed << std::setprecision(4) 
-                    //               << (scores[k].second * 100.0f) << "%" << std::endl;
-                    // }
-                    // std::cout << "True label: " << repeated_labels[i] << std::endl;
-                // }
             }
-            catch (const std::exception& e) {
-                std::cerr << "Error processing image " << i << ": " << e.what() << std::endl;
-                continue;
+
+            if (batch_idx % 10 == 0) {
+                float running_accuracy = (static_cast<float>(correct_count) / ((batch_idx + 1) * batch_size)) * 100.0f;
+                std::cout << "Processed " << (batch_idx + 1) * batch_size << "/" << total_images 
+                         << " images. Accuracy: " << std::fixed 
+                         << std::setprecision(2) << running_accuracy << "%" << std::endl;
             }
         }
 
-        // Print final statistics
         float accuracy = static_cast<float>(correct_count) / total_images * 100.0f;
-        float avg_time = total_time / total_images;
-        float throughput = 1000.0f / avg_time;
+        float avg_time = total_time / total_batches;
+        float throughput = (batch_size * 1000.0f) / avg_time;
 
         std::cout << "\n=== Final Results ===" << std::endl;
-        std::cout << "Model type: Tensor Core" << std::endl;
+        std::cout << "Model type: Tensor Core FP16" << std::endl;
+        std::cout << "Batch size: " << batch_size << std::endl;
         std::cout << "Total images: " << total_images << std::endl;
         std::cout << "Correct predictions: " << correct_count << std::endl;
         std::cout << "Accuracy: " << std::fixed << std::setprecision(2) << accuracy << "%" << std::endl;
-        std::cout << "Average inference time: " << std::fixed << std::setprecision(3) 
-                  << avg_time << " ms" << std::endl;
-        std::cout << "Throughput: " << std::fixed << std::setprecision(1) 
-                  << throughput << " images/second" << std::endl;
-        std::cout << "Total evaluation time: " << std::fixed << std::setprecision(2) 
-                  << total_time / 1000.0f << " seconds" << std::endl;
+        std::cout << "Average batch time: " << std::fixed << std::setprecision(3) << avg_time << " ms" << std::endl;
+        std::cout << "Throughput: " << std::fixed << std::setprecision(1) << throughput << " images/sec" << std::endl;
+        std::cout << "Total time: " << std::fixed << std::setprecision(2) << total_time / 1000.0f << " seconds" << std::endl;
 
         CUDA_CHECK(cudaEventDestroy(start));
         CUDA_CHECK(cudaEventDestroy(stop));

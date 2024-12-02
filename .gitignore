@@ -12,3 +12,9 @@
 
 ## anything logs
 **/*.log
+
+# nvidia stuff
+**/nvidia
+**/*.nsys-rep
+**/*.nvvp
+**/*.sqlite
