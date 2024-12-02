@@ -56,7 +56,6 @@ public:
     void checkTensorCoreUsage();
     void infer(const std::vector<float>& input_data);
     std::vector<float> getOutput();
-
 private:
     cudnnHandle_t cudnn;
 
@@ -74,12 +73,10 @@ private:
     cudnnFilterDescriptor_t conv2_filter_desc;
     cudnnFilterDescriptor_t fc1_filter_desc;
     cudnnFilterDescriptor_t fc2_filter_desc;
-
     cudnnTensorDescriptor_t conv1_bias_desc;
     cudnnTensorDescriptor_t conv2_bias_desc;
     cudnnTensorDescriptor_t fc1_bias_desc;
     cudnnTensorDescriptor_t fc2_bias_desc;
-
     cudnnConvolutionDescriptor_t conv1_desc;
     cudnnConvolutionDescriptor_t conv2_desc;
     cudnnConvolutionDescriptor_t fc1_desc;
@@ -126,8 +123,8 @@ TensorCNNInference::TensorCNNInference(int batch_size_, const std::string& weigh
     : batch_size(batch_size_) {
     std::cout << "Initializing CuDNN..." << std::endl;
     CUDNN_CHECK(cudnnCreate(&cudnn));
-
-    // Create all descriptors
+    
+    // Create descriptors
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&input_desc));
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&conv1_output_desc));
     CUDNN_CHECK(cudnnCreateTensorDescriptor(&pool1_output_desc));
@@ -632,7 +629,7 @@ void TensorCNNInference::infer(const std::vector<float>& input_data) {
         &alpha, conv1_output_desc, d_conv1_output,
         &beta, pool1_output_desc, d_pool1_output));
 
-    // Conv2 layer
+    // Conv2 + ReLU
     CUDNN_CHECK(cudnnConvolutionForward(cudnn, &alpha,
         pool1_output_desc, d_pool1_output,
         conv2_filter_desc, d_conv2_weight,
@@ -657,7 +654,7 @@ void TensorCNNInference::infer(const std::vector<float>& input_data) {
         &alpha, conv2_output_desc, d_conv2_output,
         &beta, pool2_output_desc, d_pool2_output));
 
-    // FC1 layer
+    // FC1 + ReLU
     CUDNN_CHECK(cudnnConvolutionForward(cudnn, &alpha,
         pool2_flat_desc, d_pool2_output,
         fc1_filter_desc, d_fc1_weight,
@@ -677,7 +674,7 @@ void TensorCNNInference::infer(const std::vector<float>& input_data) {
         &alpha, fc1_output_desc, d_fc1_output,
         &beta, fc1_output_desc, d_fc1_output));
 
-    // FC2 layer (final layer)
+    // FC2 (final layer)
     CUDNN_CHECK(cudnnConvolutionForward(cudnn, &alpha,
         fc1_output_desc, d_fc1_output,
         fc2_filter_desc, d_fc2_weight,

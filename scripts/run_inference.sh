@@ -22,6 +22,13 @@ log_error() {
     echo -e "${red}[ERROR]${nc} $(date '+%Y-%m-%d %H:%M:%S') - $1" >&2
 }
 
+get_absolute_path() {
+    local path=$1
+    echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+}
+
+
+
 # Command execution with logging
 print_and_execute() {
     echo -e "${green}+ $@${nc}" >&2
@@ -62,6 +69,40 @@ verify_binary() {
     if [ ! -x "$binary" ]; then
         log_error "Binary not found or not executable: $binary"
         exit 1
+    fi
+}
+
+# Function to create the expected data directory structure within bin_path
+create_data_symlink() {
+    local bin_path=$1
+    local repo_path=$2
+
+    # The binaries expect ../../../data relative to their location
+    # So if binaries are in inference/build/, we need to create the link at the right level
+    local link_parent="${bin_path}/../../.."
+    local link_path="${link_parent}/data"
+    local target_path="${repo_path}/data"
+
+    # Create parent directories if they don't exist
+    mkdir -p "${link_parent}"
+
+    # Create the symlink if it doesn't already exist
+    if [ ! -L "$link_path" ]; then
+        log_info "Creating symlink for data directory: $target_path -> $link_path"
+        ln -s "$target_path" "$link_path"
+    fi
+}
+
+
+# Function to remove symlink after execution
+
+remove_data_symlink() {
+    local bin_path=$1
+    local link_path="${bin_path}/../../.."
+    
+    if [ -L "${link_path}/data" ]; then
+        log_info "Removing symlink for data directory at ${link_path}/data"
+        rm "${link_path}/data"
     fi
 }
 
@@ -193,6 +234,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+
+repo_path=$(get_absolute_path "$repo_path")
+bin_path=$(get_absolute_path "$bin_path")
+
 # Validate required arguments
 if [ -z "$machine" ] || [ -z "$repo_path" ] || [ -z "$bin_path" ]; then
     log_error "Missing required arguments"
@@ -218,6 +263,9 @@ verify_directory "$bin_path" "Binary"
 # Create logs directory with precision, machine name, and batch size
 logs_dir="$(pwd)/logs_fp${fp}_${machine}_bs${batch_size}"
 print_and_execute mkdir -p "$logs_dir"
+
+# Create temporary data symlink for relative paths
+create_data_symlink "$bin_path" "$repo_path"
 
 # Select appropriate GPU mapping based on machine
 gpu_labels=()
